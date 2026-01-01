@@ -46,7 +46,34 @@ pip install -r requirements.txt
 
 ### 使用方法
 
-#### 分析单个视频
+#### Debug Pipeline Quickstart（推荐先运行）
+
+**一键测试从视频到debug输出的流程：**
+
+```bash
+# 安装依赖
+pip install -r requirements_computer.txt
+
+# 运行debug pipeline（自动查找视频文件）
+python scripts/run_debug_pipeline.py --outdir out/debug_run --use_markers 1
+
+# 或指定视频文件
+python scripts/run_debug_pipeline.py --input IMG_4504.MOV --outdir out/debug_run --use_markers 1
+```
+
+**验收标准：**
+1. 查看 `out/debug_run/debug/grid_overlay.png` - 网格线应该贴合棋盘格
+2. 查看 `out/debug_run/debug/aruco_preview.png` - 应该看到4个标记（ID 0,1,2,3）被检测到
+3. 查看 `out/debug_run/debug/warped_boards/` - 矫正后的棋盘应该是正对、无透视畸变
+4. 查看 `out/debug_run/debug/stable_frames/` - 应该有多张稳定帧
+5. 查看 `out/debug_run/debug/motion.csv` - 运动数据记录
+
+**如果grid_overlay.png的网格不贴合：**
+- 检查ArUco标记是否清晰可见
+- 检查标记是否贴在棋盘四角（ID 0=左上, 1=右上, 2=右下, 3=左下）
+- 调整拍摄角度，确保标记不被遮挡
+
+#### 分析单个视频（完整流程）
 
 ```bash
 python -m otbreview analyze --input video.mp4 --outdir out/game1

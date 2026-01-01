@@ -258,3 +258,79 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     
     return rect
 
+
+def detect_and_warp_board_debug(
+    frame_path: str,
+    use_markers: bool = True,
+    output_dir: Optional[str] = None,
+    frame_idx: int = 0
+) -> Tuple[bool, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    检测棋盘并执行透视矫正（Debug版本）
+    
+    Args:
+        frame_path: 输入帧路径
+        use_markers: 是否使用ArUco标记
+        output_dir: 输出目录
+        frame_idx: 帧索引（用于命名）
+    
+    Returns:
+        (success, warped_board, preview_image, grid_overlay_image)
+        success: 是否成功检测到4个标记
+        warped: 矫正后的棋盘（800x800）
+        preview: ArUco检测预览图（原图+标记框）
+        grid: 网格覆盖图（warped+8x8网格）
+    """
+    frame = cv2.imread(frame_path)
+    if frame is None:
+        return False, None, None, None
+    
+    if not use_markers:
+        return False, None, None, None
+    
+    # 检测ArUco标记
+    id_to_corner = detect_aruco_corners(frame)
+    
+    if id_to_corner is None:
+        return False, None, None, None
+    
+    # 使用ArUco标记进行透视变换
+    warped = warp_board(frame, id_to_corner, size=800)
+    
+    # 生成ArUco预览图（原图+标记框）
+    preview_img = frame.copy()
+    for marker_id, corners in id_to_corner.items():
+        # 绘制标记边界（绿色）
+        corners_int = corners.astype(np.int32)
+        cv2.polylines(preview_img, [corners_int], True, (0, 255, 0), 3)
+        # 绘制标记中心（红色圆点）
+        center = corners.mean(axis=0).astype(int)
+        cv2.circle(preview_img, tuple(center), 15, (0, 0, 255), -1)
+        # 标记ID（白色文字）
+        cv2.putText(preview_img, f"ID:{marker_id}", 
+                   (center[0] - 20, center[1] - 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+    
+    # 生成网格覆盖图（在warped上画8x8网格）
+    grid_img = warped.copy()
+    cell_size = 800 // 8  # 100像素每格
+    
+    # 画垂直线
+    for i in range(9):
+        x = i * cell_size
+        cv2.line(grid_img, (x, 0), (x, 800), (0, 255, 0), 2)
+    
+    # 画水平线
+    for i in range(9):
+        y = i * cell_size
+        cv2.line(grid_img, (0, y), (800, y), (0, 255, 0), 2)
+    
+    # 保存矫正后的棋盘
+    if output_dir is not None:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        output_file = output_path / f"warp_{frame_idx+1:04d}.png"
+        cv2.imwrite(str(output_file), warped)
+    
+    return True, warped, preview_img, grid_img
+
