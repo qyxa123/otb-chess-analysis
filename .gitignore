@@ -32,25 +32,24 @@ ENV/
 *.swo
 *~
 
-# Output directories (commented out - user wants to upload all files)
-# out/
-# output/
-# web_replays/
-# templates/
-# recordings/
-# debug/
+# Output directories (测试输出不上传)
+out/
+output/
+web_replays/
+templates/
+recordings/
+debug/
 
-# Video files (commented out - user wants to upload all files)
-# *.mp4
-# *.mov
-# *.avi
-# *.mkv
+# Video files (测试视频不上传)
+*.mp4
+*.mov
+*.avi
+*.mkv
 
-# Analysis outputs (commented out - user wants to upload all files)
-# *.pgn
-# *.json
-# *.html
-# *.md
+# Analysis outputs (测试结果不上传)
+# 但保留代码生成的示例文件
+!examples/*.pgn
+!examples/*.json
 
 # macOS
 .DS_Store
