@@ -50,19 +50,20 @@ def detect_pieces_auto_calibrate(
     
     for row in range(8):
         for col in range(8):
-            # 提取格子中心区域（25%~75%，即中心50%）
-            margin = int(cell_h * 0.25)
-            y1 = row * cell_h + margin
-            y2 = (row + 1) * cell_h - margin
-            x1 = col * cell_w + margin
-            x2 = (col + 1) * cell_w - margin
+            # 提取格子中心区域（40% × 40%，即中心30%~70%）
+            margin_h = int(cell_h * 0.3)  # 上下各留30%
+            margin_w = int(cell_w * 0.3)  # 左右各留30%
+            y1 = row * cell_h + margin_h
+            y2 = (row + 1) * cell_h - margin_h
+            x1 = col * cell_w + margin_w
+            x2 = (col + 1) * cell_w - margin_w
             
             cell = warped_board[y1:y2, x1:x2]
             
             if cell.size == 0:
                 continue
             
-            # 提取特征（Lab颜色空间的均值，3维）
+            # 提取特征（Lab颜色空间，只取mean(L), mean(a), mean(b)）
             lab = cv2.cvtColor(cell, cv2.COLOR_BGR2LAB)
             feature = lab.mean(axis=(0, 1))  # L, a, b 均值（3维）
             

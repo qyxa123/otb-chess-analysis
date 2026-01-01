@@ -137,12 +137,13 @@ def main():
             
             for row in range(8):
                 for col in range(8):
-                    # 中心50%区域
-                    margin = int(cell_h * 0.25)
-                    y1 = row * cell_h + margin
-                    y2 = (row + 1) * cell_h - margin
-                    x1 = col * cell_w + margin
-                    x2 = (col + 1) * cell_w - margin
+                    # 中心40% × 40%区域（即中心30%~70%）
+                    margin_h = int(cell_h * 0.3)  # 上下各留30%
+                    margin_w = int(cell_w * 0.3)  # 左右各留30%
+                    y1 = row * cell_h + margin_h
+                    y2 = (row + 1) * cell_h - margin_h
+                    x1 = col * cell_w + margin_w
+                    x2 = (col + 1) * cell_w - margin_w
                     
                     cell = warped[y1:y2, x1:x2]
                     cell_filename = cells_sample_dir / f"r{row}_c{col}.png"
