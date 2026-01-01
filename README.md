@@ -124,11 +124,37 @@ python scripts/run_occupancy.py --outdir out/debug_run
 - ✅ 第2/1行（索引1/0）应该几乎全light（白色）
 - ✅ 中间四行（索引2-5）应该几乎全empty（灰色）
 
-**方法说明：**
-- 第一帧自动校准：rows 0,1,6,7作为"有子样本"，rows 2~5作为"空格样本"
-- 每格提取中心50%区域，使用Lab颜色空间均值（3维）
-- KMeans聚类（K=3），自动确定empty类（与空格样本最接近）
-- light/dark按亮度（L通道）区分
+**方法说明（两阶段识别）：**
+- **Phase A (piece vs empty)**：
+  - 从第一帧中间四排(rows 2-5)采样空格，分为white_square_empty和black_square_empty
+  - 计算两种底色模板（Lab均值）
+  - 对每格中心patch（40%×40%）：计算color_diff和edge_score
+  - 阈值自动估计：T1 = mean(color_diff_empty) + 4*std, T2 = mean(edge_score_empty) + 4*std
+  - piece判定：(color_diff > T1) OR (edge_score > T2)
+- **Phase B (light vs dark)**：
+  - 只在piece格进行
+  - 用第一帧已知布局校准：rows 0-1的piece为dark，rows 6-7的piece为light
+  - 取Lab-L均值，得到阈值Tld（两均值中点）
+  - L >= Tld -> light, else dark
+
+**调试第一帧：**
+```bash
+python scripts/debug_first_frame.py --outdir out/debug_run --patch_ratio 0.40
+```
+
+**调试输出（debug_check/）：**
+- `cells_8x8/` - 第一帧64格中心patch
+- `board_first_warp.png` - 第一帧warped图
+- `piece_mask.png` - 8x8 piece/empty掩码
+- `diff_heatmap.png` - 8x8 color_diff热力图
+- `edge_heatmap.png` - 8x8 edge_score热力图
+- `occupancy_map.png` - 8x8 E/L/D结果
+- `metrics.json` - T1/T2/Tld等参数和统计
+
+**验收标准：**
+- `piece_mask.png`：只有前两排+后两排为piece（白色）
+- `occupancy_map.png`：上两排几乎全D，下两排几乎全L，中间几乎全E
+- `metrics.json`：查看T1, T2, Tld和空格分布统计
 
 #### 从Warped棋盘帧解码PGN
 

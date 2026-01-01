@@ -13,7 +13,8 @@ import json
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from otbreview.pipeline.pieces import detect_pieces_auto_calibrate
+from otbreview.pipeline.pieces import detect_pieces_two_stage
+import numpy as np
 
 
 def save_occupancy_map(occupancy: list, output_path: Path, labels: list = None):
@@ -121,13 +122,18 @@ def main():
             print(f"  警告: 无法读取 {warped_file}")
             continue
         
-        # 使用自动校准识别
-        board_state, calibration_data = detect_pieces_auto_calibrate(
+        # 使用两阶段识别
+        board_state = detect_pieces_two_stage(
             warped_board=warped,
             frame_idx=i,
             output_dir=str(debug_dir),
-            calibration_data=calibration_data
+            patch_ratio=0.40,
+            debug=(i == 0)  # 只对第一帧输出debug
         )
+        
+        if board_state is None:
+            print(f"  警告: 识别失败 {warped_file}")
+            continue
         
         # 保存第一帧的64个格子切片
         if i == 0:
