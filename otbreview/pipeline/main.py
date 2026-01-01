@@ -66,10 +66,16 @@ def analyze_video(
             raise ValueError(f"无法检测棋盘 (帧 {i+1})")
         warped_boards.append((frame_path, warped))
         
-        # 保存第一帧的网格覆盖图
-        if i == 0 and grid_img is not None:
+        # 保存第一帧的网格覆盖图和矫正后的棋盘（用于验证）
+        if i == 0:
             import cv2
-            cv2.imwrite(str(grid_overlay_path), grid_img)
+            if grid_img is not None:
+                cv2.imwrite(str(grid_overlay_path), grid_img)
+                print(f"  网格覆盖图已保存: {grid_overlay_path}")
+            # 保存矫正后的棋盘用于验证
+            warped_debug_path = debug_dir / "warped_board_debug.png"
+            cv2.imwrite(str(warped_debug_path), warped)
+            print(f"  矫正后棋盘已保存: {warped_debug_path} (用于验证)")
     
     print(f"成功定位 {len(warped_boards)} 个棋盘")
     

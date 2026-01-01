@@ -7,7 +7,7 @@
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 
 def detect_and_warp_board(
@@ -48,13 +48,112 @@ def detect_and_warp_board(
 def _detect_with_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """
     使用ArUco标记检测棋盘四角
-    """
-    # TODO: 实现ArUco检测
-    # 使用 cv2.aruco.detectMarkers
-    # 找到4个标记，提取角点，计算透视变换矩阵
     
-    # 临时fallback到无标记方法
-    return _detect_without_markers(frame)
+    需要4个ArUco标记（ID: 0, 1, 2, 3）分别位于棋盘四角
+    """
+    id_to_corner = detect_aruco_corners(frame)
+    
+    if id_to_corner is None:
+        print("  警告: 未检测到足够的ArUco标记，fallback到纯视觉检测")
+        return _detect_without_markers(frame)
+    
+    # 使用ArUco标记进行透视变换
+    warped = warp_board(frame, id_to_corner)
+    
+    # 生成网格覆盖图（用于调试）
+    grid_img = frame.copy()
+    for marker_id, corners in id_to_corner.items():
+        # 绘制标记边界
+        corners_int = corners.astype(np.int32)
+        cv2.polylines(grid_img, [corners_int], True, (0, 255, 0), 3)
+        # 绘制标记中心
+        center = corners.mean(axis=0).astype(int)
+        cv2.circle(grid_img, tuple(center), 10, (255, 0, 0), -1)
+        # 标记ID
+        cv2.putText(grid_img, str(marker_id), tuple(center), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    
+    return warped, grid_img
+
+
+def detect_aruco_corners(image: np.ndarray) -> Optional[Dict[int, np.ndarray]]:
+    """
+    检测ArUco标记并返回ID到角点的映射
+    
+    Args:
+        image: 输入图像
+    
+    Returns:
+        如果检测到4个标记（ID: 0,1,2,3），返回 {id: corners} 字典
+        否则返回None
+    """
+    try:
+        from cv2 import aruco
+    except ImportError:
+        print("  错误: OpenCV未安装aruco模块，请升级opencv-contrib-python")
+        return None
+    
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+    params = aruco.DetectorParameters()
+    detector = aruco.ArucoDetector(aruco_dict, params)
+    
+    corners, ids, _ = detector.detectMarkers(gray)
+    
+    if ids is None or len(ids) < 4:
+        return None
+    
+    id_to_corner = {}
+    for i, marker_id in enumerate(ids.flatten()):
+        id_to_corner[int(marker_id)] = corners[i][0]
+    
+    # 只关心 0, 1, 2, 3
+    if not all(k in id_to_corner for k in [0, 1, 2, 3]):
+        return None
+    
+    return id_to_corner
+
+
+def warp_board(image: np.ndarray, id_to_corner: Dict[int, np.ndarray], size: int = 800) -> np.ndarray:
+    """
+    使用ArUco标记进行透视变换
+    
+    Args:
+        image: 输入图像
+        id_to_corner: ArUco标记ID到角点的映射
+        size: 输出棋盘尺寸（正方形）
+    
+    Returns:
+        透视矫正后的棋盘图像
+    """
+    def center(corners: np.ndarray) -> np.ndarray:
+        """计算标记中心点"""
+        return corners.mean(axis=0)
+    
+    # 源点：4个标记的中心点
+    # 顺序：左上(0), 右上(1), 右下(2), 左下(3)
+    src = np.array([
+        center(id_to_corner[0]),  # top-left
+        center(id_to_corner[1]),  # top-right
+        center(id_to_corner[2]),  # bottom-right
+        center(id_to_corner[3]),  # bottom-left
+    ], dtype=np.float32)
+    
+    # 目标点：正方形四个角
+    dst = np.array([
+        [0, 0],
+        [size, 0],
+        [size, size],
+        [0, size],
+    ], dtype=np.float32)
+    
+    # 计算透视变换矩阵
+    M = cv2.getPerspectiveTransform(src, dst)
+    
+    # 执行透视变换
+    warped = cv2.warpPerspective(image, M, (size, size))
+    
+    return warped
 
 
 def _detect_without_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
