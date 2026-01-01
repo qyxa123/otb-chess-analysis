@@ -73,6 +73,37 @@ python scripts/run_debug_pipeline.py --input IMG_4504.MOV --outdir out/debug_run
 - 检查标记是否贴在棋盘四角（ID 0=左上, 1=右上, 2=右下, 3=左下）
 - 调整拍摄角度，确保标记不被遮挡
 
+#### 验收检查（无需看代码）
+
+**一键生成验收报告：**
+
+```bash
+# 生成检查报告
+python scripts/make_check_report.py --outdir out/debug_run
+
+# 报告会自动生成在 out/debug_run/CHECK.html
+# 双击打开即可查看
+```
+
+**或使用快捷脚本（macOS）：**
+
+```bash
+# 自动找到最近的CHECK.html并打开
+./scripts/open_check.sh
+```
+
+**报告包含：**
+- ✅ 基本信息（稳定帧数量、成功warp数量、失败帧列表）
+- 🖼️ 关键图片（第一张稳定帧、第一张warped棋盘、grid_overlay）
+- ✅ 快速判定（PASS/FAIL提示）
+- 📋 Occupancy Maps（如果有）
+- ⚠️ 不确定走法（如果有）
+
+**验收标准：**
+- 查看CHECK.html中的"快速判定"部分
+- 如果显示"✅ PASS：网格线基本贴合格子边"，说明对齐正确
+- 如果显示"❌ FAIL"，请检查ArUco标记是否正确
+
 #### 从Warped棋盘帧解码PGN
 
 **从已矫正的棋盘图像生成PGN：**
