@@ -149,32 +149,48 @@ def _calibrate_from_first_frame(
     cluster_centers = kmeans.cluster_centers_
     cluster_labels = kmeans.labels_
     
-    # 自动判定哪类是empty
-    # 计算每个聚类中心与empty_samples的平均距离
-    empty_distances = []
-    for center in cluster_centers:
-        dists = np.linalg.norm(empty_samples - center, axis=1)
-        empty_distances.append(np.mean(dists))
+    # 改进的自动判定方法：
+    # 1. empty类：在rows 2~5中占比最高的cluster
+    empty_row_indices = [i for i, (row, _) in enumerate(cell_positions) if row in [2, 3, 4, 5]]
+    empty_cluster_counts = [0, 0, 0]
+    for idx in empty_row_indices:
+        cluster_id = cluster_labels[idx]
+        empty_cluster_counts[cluster_id] += 1
+    empty_cluster_idx = np.argmax(empty_cluster_counts)
     
-    empty_cluster_idx = np.argmin(empty_distances)
+    # 2. light/dark：根据在rows 0,1和rows 6,7中的分布
+    # rows 0,1应该是light（白方），rows 6,7应该是dark（黑方）
+    light_row_indices = [i for i, (row, _) in enumerate(cell_positions) if row in [0, 1]]
+    dark_row_indices = [i for i, (row, _) in enumerate(cell_positions) if row in [6, 7]]
     
-    # 另外两类按亮度区分light/dark
-    # 使用L通道（Lab的第一个通道）的均值
-    remaining_centers = []
-    remaining_indices = []
-    for i in range(3):
-        if i != empty_cluster_idx:
-            remaining_centers.append(cluster_centers[i])
-            remaining_indices.append(i)
+    remaining_indices = [i for i in range(3) if i != empty_cluster_idx]
     
-    # 比较L通道（亮度）
-    l_values = [center[0] for center in remaining_centers]  # L是第一个通道
-    if l_values[0] > l_values[1]:
+    # 计算每个remaining cluster在light rows和dark rows中的占比
+    light_scores = []
+    dark_scores = []
+    for cluster_id in remaining_indices:
+        light_count = sum(1 for idx in light_row_indices if cluster_labels[idx] == cluster_id)
+        dark_count = sum(1 for idx in dark_row_indices if cluster_labels[idx] == cluster_id)
+        light_scores.append(light_count)
+        dark_scores.append(dark_count)
+    
+    # 在light rows中占比高的=light，在dark rows中占比高的=dark
+    if light_scores[0] > light_scores[1]:
         light_cluster_idx = remaining_indices[0]
         dark_cluster_idx = remaining_indices[1]
     else:
         light_cluster_idx = remaining_indices[1]
         dark_cluster_idx = remaining_indices[0]
+    
+    # 如果还是不确定，用L通道亮度作为fallback
+    if light_scores[0] == light_scores[1]:
+        l_values = [cluster_centers[i][0] for i in remaining_indices]
+        if l_values[0] > l_values[1]:
+            light_cluster_idx = remaining_indices[0]
+            dark_cluster_idx = remaining_indices[1]
+        else:
+            light_cluster_idx = remaining_indices[1]
+            dark_cluster_idx = remaining_indices[0]
     
     calibration_data = {
         'cluster_centers': cluster_centers.tolist(),
