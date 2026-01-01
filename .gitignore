@@ -32,25 +32,25 @@ ENV/
 *.swo
 *~
 
-# Output directories
-out/
-output/
-web_replays/
-templates/
-recordings/
-debug/
+# Output directories (commented out - user wants to upload all files)
+# out/
+# output/
+# web_replays/
+# templates/
+# recordings/
+# debug/
 
-# Video files
-*.mp4
-*.mov
-*.avi
-*.mkv
+# Video files (commented out - user wants to upload all files)
+# *.mp4
+# *.mov
+# *.avi
+# *.mkv
 
-# Analysis outputs
-*.pgn
-*.json
-*.html
-*.md
+# Analysis outputs (commented out - user wants to upload all files)
+# *.pgn
+# *.json
+# *.html
+# *.md
 
 # macOS
 .DS_Store
