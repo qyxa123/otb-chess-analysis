@@ -8,12 +8,20 @@ from pathlib import Path
 from datetime import datetime
 import contextlib
 import io
+from typing import Dict, List, Tuple
+
+import altair as alt
+import pandas as pd
+import chess
+import chess.svg
 
 # Ensure project root is in path
 PROJECT_ROOT = Path(__file__).parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from otbreview.pipeline.main import analyze_video
+from self_analysis import analyze_pgn
+from game_review import GameReviewFormatter
 
 # Config
 RUNS_DIR = PROJECT_ROOT / "runs"
@@ -52,6 +60,147 @@ for run_dir in runs:
         st.rerun()
 
 # --- Functions ---
+
+
+def _load_pgn_text(run_dir: Path) -> str:
+    pgn_path = run_dir / "game.pgn"
+    if not pgn_path.exists():
+        raise FileNotFoundError("No PGN generated for this run.")
+    return pgn_path.read_text(encoding="utf-8")
+
+
+def _board_at_ply(pgn_text: str, ply: int) -> Tuple[chess.Board, List[chess.Move]]:
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    if game is None:
+        raise ValueError("Invalid PGN provided")
+    board = game.board()
+    moves = list(game.mainline_moves())
+    for mv in moves[:ply]:
+        board.push(mv)
+    return board, moves
+
+
+def _accuracy_for_color(analysis: List[Dict[str, object]], color_is_white: bool) -> float:
+    penalties = []
+    for idx, item in enumerate(analysis):
+        mover_is_white = idx % 2 == 0
+        if mover_is_white != color_is_white:
+            continue
+        penalties.append(abs(float(item.get("best_diff", 0.0))))
+    if not penalties:
+        return 0.0
+    mean_penalty = sum(penalties) / len(penalties)
+    return max(0.0, min(100.0, 100.0 - mean_penalty / 2.0))
+
+
+def _phase_for_ply(ply: int, total: int) -> str:
+    if ply <= max(12, total // 4):
+        return "Opening"
+    if ply <= max(30, total // 2):
+        return "Middlegame"
+    return "Endgame"
+
+
+def _build_review_payload(run_dir: Path) -> Dict[str, object]:
+    pgn_text = _load_pgn_text(run_dir)
+    analysis_path = run_dir / "move_analysis.json"
+    if analysis_path.exists():
+        analysis: List[Dict[str, object]] = json.loads(analysis_path.read_text())
+    else:
+        analysis = analyze_pgn(pgn_text)
+        analysis_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
+
+    reviewer = GameReviewFormatter()
+    game_review = reviewer.build_review(pgn_text, analysis)
+
+    accuracy_white = _accuracy_for_color(analysis, True)
+    accuracy_black = _accuracy_for_color(analysis, False)
+    performance_rating = int(800 + (accuracy_white + accuracy_black) * 4)
+
+    # Evaluation graph
+    evaluation_scores = [
+        {"ply": idx + 1, "evaluation": float(item.get("eval_after", 0.0))}
+        for idx, item in enumerate(analysis)
+    ]
+    (run_dir / "evaluation_scores.json").write_text(
+        json.dumps(evaluation_scores, indent=2), encoding="utf-8"
+    )
+
+    # Key moves and follow-up suggestions
+    key_labels = {"Brilliant", "Great", "Mistake", "Blunder", "Miss"}
+    key_moves = []
+    follow_ups = []
+    for idx, review in enumerate(game_review.reviews):
+        if review.label not in key_labels:
+            continue
+        candidates = analysis[idx].get("candidate_lines", [])
+        follow_up_options = [
+            {
+                "san": cand.get("san"),
+                "eval_after": cand.get("eval_after"),
+                "continuation": cand.get("continuation"),
+            }
+            for cand in candidates
+        ]
+        follow_ups.append(
+            {
+                "ply": review.ply,
+                "move": review.san,
+                "label": review.label,
+                "options": follow_up_options,
+            }
+        )
+        key_moves.append(
+            {
+                "ply": review.ply,
+                "san": review.san,
+                "label": review.label,
+                "eval_before": review.eval_before,
+                "eval_after": review.eval_after,
+                "perspective_change": review.perspective_change,
+                "best_san": review.best_san,
+                "coach": {
+                    "headline": review.coach.headline,
+                    "detail": review.coach.detail,
+                    "suggestions": review.coach.suggestions,
+                },
+                "arrow": analysis[idx].get("suggestion_arrow"),
+                "follow_up": follow_up_options,
+            }
+        )
+
+    (run_dir / "key_moves.json").write_text(json.dumps(key_moves, indent=2), encoding="utf-8")
+    (run_dir / "follow_up_moves.json").write_text(json.dumps(follow_ups, indent=2), encoding="utf-8")
+
+    classification_counts: Dict[str, int] = {}
+    phase_scores: Dict[str, List[float]] = {"Opening": [], "Middlegame": [], "Endgame": []}
+    for idx, review in enumerate(game_review.reviews):
+        classification_counts[review.label] = classification_counts.get(review.label, 0) + 1
+        phase = _phase_for_ply(idx + 1, len(game_review.reviews))
+        mover_is_white = idx % 2 == 0
+        accuracy = accuracy_white if mover_is_white else accuracy_black
+        phase_scores[phase].append(accuracy)
+
+    phase_grades = {
+        name: round(sum(values) / len(values), 1) if values else 0.0
+        for name, values in phase_scores.items()
+    }
+
+    annotated_path = run_dir / "annotated_game.pgn"
+    annotated_path.write_text(game_review.annotated_pgn, encoding="utf-8")
+
+    return {
+        "pgn_text": pgn_text,
+        "game_review": game_review,
+        "evaluation_scores": evaluation_scores,
+        "accuracy": {"white": accuracy_white, "black": accuracy_black},
+        "classification_counts": classification_counts,
+        "performance_rating": performance_rating,
+        "phase_grades": phase_grades,
+        "key_moves": key_moves,
+        "follow_ups": follow_ups,
+    }
+
 
 def run_analysis(video_file, params):
     # Create Run ID
@@ -116,98 +265,253 @@ def run_analysis(video_file, params):
         f.write(log_capture_string.getvalue())
 
 
+def _render_board(board: chess.Board, arrow: Dict[str, str] = None):
+    arrows = []
+    if arrow:
+        try:
+            arrows.append(
+                chess.svg.Arrow(
+                    chess.parse_square(arrow["from"]),
+                    chess.parse_square(arrow["to"]),
+                    color="#ff4136",
+                )
+            )
+        except Exception:
+            pass
+    svg = chess.svg.board(board=board, arrows=arrows, size=380)
+    st.components.v1.html(svg, height=400)
+
+
+def _render_game_review_tab(run_dir: Path):
+    try:
+        payload = _build_review_payload(run_dir)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Unable to build game review: {exc}")
+        return
+
+    game_review = payload["game_review"]
+    accuracy = payload["accuracy"]
+
+    st.markdown("### Chess.com-style Game Review")
+    col_metrics = st.columns(4)
+    col_metrics[0].metric("White Accuracy", f"{accuracy['white']:.1f}")
+    col_metrics[1].metric("Black Accuracy", f"{accuracy['black']:.1f}")
+    col_metrics[2].metric("Performance Rating", payload["performance_rating"])
+    col_metrics[3].metric("Total Moves", len(game_review.reviews))
+
+    chart_df = pd.DataFrame(payload["evaluation_scores"])
+    chart_df["move"] = chart_df["ply"]
+    chart = (
+        alt.Chart(chart_df)
+        .mark_line(point=True)
+        .encode(x="move", y="evaluation", tooltip=["move", "evaluation"])
+        .properties(height=260)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    col_stats = st.columns(2)
+    with col_stats[0]:
+        st.markdown("#### Move Classification")
+        stats_df = pd.DataFrame(
+            [
+                {"Label": label, "Count": count}
+                for label, count in payload["classification_counts"].items()
+            ]
+        )
+        if not stats_df.empty:
+            st.bar_chart(stats_df.set_index("Label"))
+        else:
+            st.info("No classified moves available.")
+        st.markdown("#### Phase Grades")
+        st.table(
+            pd.DataFrame(
+                [{"Phase": k, "Accuracy": v} for k, v in payload["phase_grades"].items()]
+            )
+        )
+
+    with col_stats[1]:
+        st.markdown("#### Accuracy by Side")
+        st.progress(min(1.0, accuracy["white"] / 100), text=f"White: {accuracy['white']:.1f}")
+        st.progress(min(1.0, accuracy["black"] / 100), text=f"Black: {accuracy['black']:.1f}")
+
+    st.divider()
+    st.markdown("### Key Moves & Coach")
+    key_moves = payload["key_moves"]
+    if not key_moves:
+        st.info("No key moves identified for this game.")
+        return
+
+    state_key = f"key_move_index_{run_dir.name}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = 0
+
+    current_idx = st.session_state[state_key]
+    current_idx = max(0, min(current_idx, len(key_moves) - 1))
+    st.session_state[state_key] = current_idx
+    current_move = key_moves[current_idx]
+
+    nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
+    with nav_col1:
+        if st.button("⬅️ Previous", disabled=current_idx == 0):
+            st.session_state[state_key] = current_idx - 1
+            st.rerun()
+    with nav_col2:
+        st.markdown(
+            f"**Move {current_move['ply']}: {current_move['san']} ({current_move['label']})**"
+        )
+    with nav_col3:
+        if st.button("Next Move ➡️", disabled=current_idx >= len(key_moves) - 1):
+            st.session_state[state_key] = current_idx + 1
+            st.rerun()
+
+    board, moves = _board_at_ply(payload["pgn_text"], current_move["ply"] - 1)
+    display_col, coach_col = st.columns([1, 1])
+
+    with display_col:
+        _render_board(board, current_move.get("arrow"))
+        st.caption("Position before the key move. Arrows highlight the engine suggestion.")
+
+        st.markdown("**Follow-Up Variations**")
+        follow_options = current_move.get("follow_up", [])
+        if follow_options:
+            option_labels = [f"{opt['san']} (eval {opt['eval_after']:.1f})" for opt in follow_options]
+            selected = st.selectbox("Show Follow-Up", option_labels, key=f"follow_{state_key}_{current_idx}")
+            selected_idx = option_labels.index(selected)
+            st.write(f"Continuation: {follow_options[selected_idx]['continuation']}")
+        else:
+            st.info("No follow-up variations available for this move.")
+
+        with st.expander("Retry this move"):
+            legal_sans = [board.san(mv) for mv in board.legal_moves]
+            choice = st.selectbox("Pick your move", legal_sans, key=f"retry_{state_key}_{current_idx}")
+            if st.button("Submit retry", key=f"retry_btn_{state_key}_{current_idx}"):
+                target = current_move.get("best_san") or current_move["san"]
+                if choice == target:
+                    st.success("Correct move! Your positional score is now +5.")
+                else:
+                    st.error(
+                        f"Not quite. {target} keeps the advantage. {current_move['coach']['detail']}"
+                    )
+                best_arrow = current_move.get("arrow")
+                if best_arrow:
+                    st.caption("Correct move highlighted below:")
+                    _render_board(board, best_arrow)
+
+    with coach_col:
+        st.markdown(f"#### Coach says: {current_move['coach']['headline']}")
+        st.write(current_move["coach"]["detail"])
+        st.markdown("**Suggestions**")
+        for tip in current_move["coach"].get("suggestions", []):
+            st.markdown(f"- {tip}")
+
+    st.markdown("### Full PGN & Downloads")
+    st.text_area("Game PGN", payload["pgn_text"], height=180)
+    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
+    with dl_col1:
+        st.download_button("Download PGN", payload["pgn_text"], file_name=f"{run_dir.name}.pgn")
+    with dl_col2:
+        st.download_button(
+            "Analysis JSON",
+            data=json.dumps(payload["key_moves"], indent=2),
+            file_name="key_moves.json",
+        )
+    with dl_col3:
+        st.download_button(
+            "Evaluation Scores",
+            data=json.dumps(payload["evaluation_scores"], indent=2),
+            file_name="evaluation_scores.json",
+        )
+    with dl_col4:
+        st.download_button(
+            "Follow-Up Moves",
+            data=json.dumps(payload["follow_ups"], indent=2),
+            file_name="follow_up_moves.json",
+        )
+
+
 def show_results(run_id):
     run_dir = RUNS_DIR / run_id
     st.title(f"Results: {run_id}")
-    
+
     if not run_dir.exists():
         st.error("Run directory not found.")
         return
 
-    # Layout
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("📝 PGN")
-        pgn_path = run_dir / "game.pgn"
-        if pgn_path.exists():
-            pgn_text = pgn_path.read_text()
-            st.text_area("PGN", pgn_text, height=200)
-            st.download_button("Download PGN", pgn_text, file_name=f"{run_id}.pgn")
-        else:
-            st.warning("No PGN generated.")
+    page_tabs = st.tabs(["Overview", "Game Review", "Debug"])
 
-    with col2:
-        st.subheader("📊 Files")
-        # Zip download
-        shutil.make_archive(str(run_dir / "export"), 'zip', run_dir)
-        zip_path = run_dir / "export.zip"
-        if zip_path.exists():
-             with open(zip_path, "rb") as fp:
-                 st.download_button("Download Full Report (ZIP)", fp, file_name=f"{run_id}_export.zip")
-    
-    st.divider()
-    
-    # Debug Images
-    st.subheader("🔍 Debug Visualization")
-    debug_dir = run_dir / "debug"
-    
-    tabs = st.tabs(["Stable Frames", "Warped Board", "Grid Overlay", "Occupancy", "Replay"])
-    
-    with tabs[0]:
-        stable_dir = debug_dir / "stable_frames"
-        if stable_dir.exists():
-            images = sorted(list(stable_dir.glob("*.png")) + list(stable_dir.glob("*.jpg")))
-            if images:
-                st.image(str(images[0]), caption="First Stable Frame", use_container_width=True)
-                if len(images) > 1:
-                    st.info(f"Total stable frames: {len(images)}")
+    with page_tabs[0]:
+        col1, col2 = st.columns([1, 1])
+
+        with col1:
+            st.subheader("📝 PGN")
+            pgn_path = run_dir / "game.pgn"
+            if pgn_path.exists():
+                pgn_text = pgn_path.read_text()
+                st.text_area("PGN", pgn_text, height=200)
+                st.download_button("Download PGN", pgn_text, file_name=f"{run_id}.pgn")
             else:
-                st.write("No stable frames found.")
-    
-    with tabs[1]:
-        # Warped board debug
-        warped_debug = debug_dir / "warped_board_debug.png"
-        if warped_debug.exists():
-             st.image(str(warped_debug), caption="Warped Board (Check Perspective)", use_container_width=True)
-        else:
-             st.write("No warped board debug image.")
+                st.warning("No PGN generated.")
 
-    with tabs[2]:
-        grid_overlay = debug_dir / "grid_overlay.png"
-        if grid_overlay.exists():
-             st.image(str(grid_overlay), caption="Grid Overlay (Check Alignment)", use_container_width=True)
-        else:
-             st.write("No grid overlay image.")
-             
-    with tabs[3]:
-        # Occupancy / Cells
-        # Maybe show a grid of recognized cells for the first frame?
-        # Or just link to the folder
-        st.write("Cell images are saved in debug/cells/")
-    
-    with tabs[4]:
-        st.subheader("♟️ Web Replay")
-        # Check if index.html exists
-        index_html = run_dir / "index.html"
-        if index_html.exists():
-            # We need to serve this or read it. 
-            # Embedding raw HTML with iframes might run into path issues if it references local files (like css/js).
-            # But the generator likely embeds CSS/JS or uses CDNs.
-            # Let's check if we can display it.
-            # Reading content and using components.html usually works if self-contained.
-            # If it references 'game.pgn' via relative path, it might break in streamlit component iframe sandbox.
-            
-            # Option 1: Read content and try to fix paths?
-            # Option 2: Just serve a link? (Can't easily serve local link)
-            # Option 3: Use Streamlit Static File Serving? (Too complex setup)
-            # Option 4: Assume the generated HTML embeds the PGN or is robust.
-            
-            # Let's try dumping the HTML directly.
-            html_content = index_html.read_text(encoding='utf-8')
-            st.components.v1.html(html_content, height=800, scrolling=True)
-        else:
-            st.warning("Web replay file (index.html) not found.")
+        with col2:
+            st.subheader("📊 Files")
+            # Zip download
+            shutil.make_archive(str(run_dir / "export"), 'zip', run_dir)
+            zip_path = run_dir / "export.zip"
+            if zip_path.exists():
+                with open(zip_path, "rb") as fp:
+                    st.download_button("Download Full Report (ZIP)", fp, file_name=f"{run_id}_export.zip")
+
+    with page_tabs[1]:
+        _render_game_review_tab(run_dir)
+
+    with page_tabs[2]:
+        # Debug Images
+        st.subheader("🔍 Debug Visualization")
+        debug_dir = run_dir / "debug"
+
+        tabs = st.tabs(["Stable Frames", "Warped Board", "Grid Overlay", "Occupancy", "Replay"])
+
+        with tabs[0]:
+            stable_dir = debug_dir / "stable_frames"
+            if stable_dir.exists():
+                images = sorted(list(stable_dir.glob("*.png")) + list(stable_dir.glob("*.jpg")))
+                if images:
+                    st.image(str(images[0]), caption="First Stable Frame", use_container_width=True)
+                    if len(images) > 1:
+                        st.info(f"Total stable frames: {len(images)}")
+                else:
+                    st.write("No stable frames found.")
+
+        with tabs[1]:
+            # Warped board debug
+            warped_debug = debug_dir / "warped_board_debug.png"
+            if warped_debug.exists():
+                 st.image(str(warped_debug), caption="Warped Board (Check Perspective)", use_container_width=True)
+            else:
+                 st.write("No warped board debug image.")
+
+        with tabs[2]:
+            grid_overlay = debug_dir / "grid_overlay.png"
+            if grid_overlay.exists():
+                 st.image(str(grid_overlay), caption="Grid Overlay (Check Alignment)", use_container_width=True)
+            else:
+                 st.write("No grid overlay image.")
+
+        with tabs[3]:
+            # Occupancy / Cells
+            # Maybe show a grid of recognized cells for the first frame?
+            # Or just link to the folder
+            st.write("Cell images are saved in debug/cells/")
+
+        with tabs[4]:
+            st.subheader("♟️ Web Replay")
+            # Check if index.html exists
+            index_html = run_dir / "index.html"
+            if index_html.exists():
+                html_content = index_html.read_text(encoding='utf-8')
+                st.components.v1.html(html_content, height=800, scrolling=True)
+            else:
+                st.warning("Web replay file (index.html) not found.")
 
 
 # --- Main Logic ---
