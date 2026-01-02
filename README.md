@@ -44,6 +44,24 @@ source venv/bin/activate  # macOS/Linux
 pip install -r requirements.txt
 ```
 
+### Print Piece Tags
+
+- 默认标签尺寸为 **5mm x 5mm**（推荐）。如果棋子顶部空间有限可选 **3mm**，但检测容错会更小。
+- 将标签贴在棋子顶部，尽量保持水平，避免强烈反光；贴好后检查标签边界不要被弯折或遮挡。
+- 生成打印文件：
+
+```bash
+# 生成 32 张 PNG 标签 + A4 PDF 排版（AprilTag 36h11，默认 5mm）
+python scripts/generate_piece_tags.py
+
+# 如果需要 ArUco 4x4 或 5x5，可指定 family，同时修改打印尺寸（单位：mm）
+python scripts/generate_piece_tags.py --family aruco5x5 --tag-size-mm 3
+```
+
+输出目录：
+- `assets/piece_tags/png/tag_01.png ... tag_32.png`
+- `assets/piece_tags/piece_tags_print_sheet.pdf`（包含裁切线与编号，直接打印 A4）
+
 ### 使用方法
 
 #### Debug Pipeline Quickstart（推荐先运行）
