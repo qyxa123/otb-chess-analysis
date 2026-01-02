@@ -64,8 +64,9 @@ def analyze_video(
     warped_boards = []
     grid_overlay_path = debug_dir / "grid_overlay.png"
     
+    corner_counts = []
     for i, frame_path in enumerate(stable_frames):
-        warped, grid_img = detect_and_warp_board(
+        warped, grid_img, corner_count = detect_and_warp_board(
             frame_path=frame_path,
             use_markers=use_markers,
             output_dir=str(debug_dir / "warped_boards")
@@ -73,6 +74,7 @@ def analyze_video(
         if warped is None:
             raise ValueError(f"无法检测棋盘 (帧 {i+1})")
         warped_boards.append((frame_path, warped))
+        corner_counts.append(corner_count)
         
         # 保存第一帧的网格覆盖图和矫正后的棋盘（用于验证）
         if i == 0:
@@ -112,6 +114,34 @@ def analyze_video(
         id_grids = [s.get('piece_ids', []) for s in board_states]
         with open(board_ids_path, 'w', encoding='utf-8') as f:
             json.dump(id_grids, f, indent=2)
+        # 保存标签识别质量指标
+        tag_metrics_rows = []
+        expected_pieces = 32
+        for idx, state in enumerate(board_states):
+            grid = state.get('piece_ids', [])
+            flat_ids = [pid for row in grid for pid in row if pid]
+            occupied = len(flat_ids)
+            unique_detected = len(set(flat_ids))
+            coverage = occupied / expected_pieces if expected_pieces else 0
+            warnings = state.get('tag_warnings', [])
+            if idx == 0 and unique_detected < 20:
+                warnings = list(warnings) + ["LOW CONFIDENCE: 起始局面标签不足20"]
+            tag_metrics_rows.append({
+                'frame': idx,
+                'corner_markers': corner_counts[idx] if idx < len(corner_counts) else 0,
+                'tag_ids': unique_detected,
+                'occupied_squares': occupied,
+                'coverage': f"{coverage:.2f}",
+                'warnings': "; ".join(warnings),
+            })
+
+        metrics_path = debug_dir / "tag_metrics.csv"
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            f.write("frame,corner_markers,tag_ids,occupied_squares,coverage,warnings\n")
+            for row in tag_metrics_rows:
+                f.write(
+                    f"{row['frame']},{row['corner_markers']},{row['tag_ids']},{row['occupied_squares']},{row['coverage']},\"{row['warnings']}\"\n"
+                )
     else:
         # 如果不使用标签，则不生成该文件，并在后面调用时传 None
         board_ids_path = None

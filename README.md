@@ -35,6 +35,21 @@
 
 网页复盘新增「Tag Overlay Viewer」页签：可选择帧查看`overlay`叠加图和8x8 piece_id表格，并在侧边展示ID映射，方便核对检测结果。
 
+#### Tag Mode: 3mm Setup + Recording Tips + Acceptance Criteria
+
+- **录制建议**：
+  - 3mm 标签对分辨率和对焦要求更高，建议 1080p 以上、靠近棋盘拍摄，并避免强烈金属反光（可在棋子顶部粘一层磨砂透明贴减反）。
+  - 确保四角 ArUco 0/1/2/3 全部入镜；轻微侧角 OK，但不要大幅倾斜或运动模糊。
+  - 如环境噪声大可适当缩短稳定阈值（`--motion-threshold 0.01 --stable-duration 0.5` 为默认）。
+- **校验一键命令**：
+  - 运行 `python scripts/run_tag_demo.py --input <video> --outdir out/tag_demo`。
+  - 输出目录包含 `TAG_CHECK.html`（嵌入 overlay/zoom/grid/missing 图）、`debug/tag_metrics.csv`、`debug/board_ids.json`、`debug/tag_overlays/overlay_xxxx.png`。
+- **自动验收标准（TAG_CHECK.html 顶部 PASS）**：
+  - 检测到 4 个角标；
+  - 第一帧识别到 ≥28 个唯一棋子 ID，覆盖率 >0.7；
+  - `tag_metrics.csv` 中起始帧未出现 `LOW CONFIDENCE` 警告。
+- **人工快速查看**：首帧的 `tag_overlay.png`、`tag_overlay_zoom.png`、`tag_grid.png`、`tag_missing_ids.png` 位于 `debug/` 目录，无需读代码即可核对识别结果。
+
 ### 网页界面（小白推荐）
 
 最简单的使用方式，无需记忆命令行。

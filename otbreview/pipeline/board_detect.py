@@ -14,7 +14,7 @@ def detect_and_warp_board(
     frame_path: str,
     use_markers: bool = False,
     output_dir: Optional[str] = None
-) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], int]:
     """
     检测棋盘并执行透视矫正
     
@@ -30,8 +30,9 @@ def detect_and_warp_board(
     if frame is None:
         return None, None
     
+    corner_count = 0
     if use_markers:
-        warped, grid_img = _detect_with_markers(frame)
+        warped, grid_img, corner_count = _detect_with_markers(frame)
     else:
         warped, grid_img = _detect_without_markers(frame)
     
@@ -42,10 +43,10 @@ def detect_and_warp_board(
         output_file = output_path / f"{frame_name}_warped.jpg"
         cv2.imwrite(str(output_file), warped)
     
-    return warped, grid_img
+    return warped, grid_img, corner_count
 
 
-def _detect_with_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+def _detect_with_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], int]:
     """
     使用ArUco标记检测棋盘四角
     
@@ -55,7 +56,8 @@ def _detect_with_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optio
     
     if id_to_corner is None:
         print("  警告: 未检测到足够的ArUco标记，fallback到纯视觉检测")
-        return _detect_without_markers(frame)
+        warped, grid = _detect_without_markers(frame)
+        return warped, grid, 0
     
     # 使用ArUco标记进行透视变换
     warped = warp_board(frame, id_to_corner)
@@ -73,7 +75,7 @@ def _detect_with_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optio
         cv2.putText(grid_img, str(marker_id), tuple(center), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     
-    return warped, grid_img
+    return warped, grid_img, 4
 
 
 def detect_aruco_corners(image: np.ndarray) -> Optional[Dict[int, np.ndarray]]:

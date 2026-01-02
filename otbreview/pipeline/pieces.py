@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import json
 
+from .tag_detector import detect_piece_tags
+
 
 def detect_pieces_tags(
     warped_board: np.ndarray,
@@ -36,99 +38,98 @@ def detect_pieces_tags(
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # 初始化检测器
-    if 'aruco' in tag_family.lower():
-        if '4x4' in tag_family:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-        elif '5x5' in tag_family:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50)
-        else:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_ARUCO_ORIGINAL)
-    else:
-        # Default to AprilTag 36h11
-        try:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-        except AttributeError:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
-    parameters = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
-    
-    # 灰度化
-    gray = cv2.cvtColor(warped_board, cv2.COLOR_BGR2GRAY)
-    
-    # 检测标记
-    corners, ids, rejected = detector.detectMarkers(gray)
-    
-    # 初始化 8x8 网格
-    piece_ids_map = np.zeros((8, 8), dtype=int)
+    result = detect_piece_tags(
+        warped_board=warped_board,
+        frame_idx=frame_idx,
+        output_dir=output_path,
+    )
+
     piece_centers_map = [[None for _ in range(8)] for _ in range(8)]
-    raw_detections = []
-    
-    h, w = warped_board.shape[:2]
-    cell_h = h / 8.0
-    cell_w = w / 8.0
-    
-    # 可视化图
-    vis_img = warped_board.copy()
-    
-    if ids is not None:
-        ids = ids.flatten()
-        
-        for i, (corner, tag_id) in enumerate(zip(corners, ids)):
-            # 计算中心点
-            c = corner[0]
-            center_x = int(np.mean(c[:, 0]))
-            center_y = int(np.mean(c[:, 1]))
-            
-            # 计算面积（用于去重，取最大）
-            area = cv2.contourArea(c)
-            
-            # 映射到格子坐标 (row, col)
-            # y对应row, x对应col
-            row = int(center_y / cell_h)
-            col = int(center_x / cell_w)
-            
-            # 边界检查
-            if 0 <= row < 8 and 0 <= col < 8:
-                # 记录检测结果
-                detection = {
-                    'id': int(tag_id),
-                    'center': (center_x, center_y),
-                    'row': row,
-                    'col': col,
-                    'area': area
-                }
-                raw_detections.append(detection)
-                
-                # 填入网格（简单的冲突处理：如果已有ID，保留面积更大的？）
-                # 目前先简单覆盖，或者检查是否已经有ID
-                current_id = piece_ids_map[row, col]
-                if current_id == 0:
-                    piece_ids_map[row, col] = int(tag_id)
-                    piece_centers_map[row][col] = (center_x, center_y)
-                else:
-                    # 冲突处理：TODO
-                    # 暂时保留ID
-                    pass
-            
-            # 画框
-            cv2.aruco.drawDetectedMarkers(vis_img, corners, ids)
+    for det in result.detections:
+        piece_centers_map[det.row][det.col] = (det.center[0], det.center[1])
 
-    # 保存可视化图
-    debug_vis_path = output_path / f"tag_overlay_{frame_idx:04d}.png"
-    cv2.imwrite(str(debug_vis_path), vis_img)
-    
-    # 如果是第一帧，额外保存一份方便查看
+    # 如果是第一帧，输出额外的验证图
     if frame_idx == 0:
-        cv2.imwrite(str(output_path.parent / "tag_overlay_first.png"), vis_img)
+        _save_first_frame_views(
+            warped_board=warped_board,
+            board_ids=result.board_ids,
+            output_path=output_path,
+            detections=result.detections,
+        )
 
     return {
-        'piece_ids': piece_ids_map.tolist(),
+        'piece_ids': result.board_ids,
         'piece_centers': piece_centers_map,
-        'tag_detections': raw_detections
+        'tag_detections': [det.__dict__ for det in result.detections],
+        'tag_warnings': result.warnings,
+        'tag_conflicts': result.conflict_log,
     }
+
+
+def _save_first_frame_views(
+    warped_board: np.ndarray,
+    board_ids: List[List[int]],
+    output_path: Path,
+    detections,
+) -> None:
+    """为首帧输出额外的视觉包，便于快速人工校验。"""
+
+    overlay_path = output_path / "overlay_0000.png"
+    if overlay_path.exists():
+        overlay = cv2.imread(str(overlay_path))
+    else:
+        overlay = warped_board
+
+    debug_root = output_path.parent
+    debug_root.mkdir(parents=True, exist_ok=True)
+
+    cv2.imwrite(str(debug_root / "tag_overlay.png"), overlay)
+
+    zoom = cv2.resize(overlay, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+    cv2.imwrite(str(debug_root / "tag_overlay_zoom.png"), zoom)
+
+    grid_img = np.zeros_like(warped_board)
+    cell = warped_board.shape[0] // 8
+    for r in range(8):
+        for c in range(8):
+            top_left = (c * cell, r * cell)
+            bottom_right = ((c + 1) * cell, (r + 1) * cell)
+            cv2.rectangle(grid_img, top_left, bottom_right, (50, 180, 255), 2)
+            pid = board_ids[r][c]
+            if pid:
+                cv2.putText(
+                    grid_img,
+                    str(pid),
+                    (top_left[0] + 10, top_left[1] + cell // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    (255, 255, 255),
+                    2,
+                )
+    cv2.imwrite(str(debug_root / "tag_grid.png"), grid_img)
+
+    missing = [pid for pid in range(1, 33) if pid not in np.array(board_ids).flatten()]
+    missing_img = np.full((300, 600, 3), 255, dtype=np.uint8)
+    cv2.putText(
+        missing_img,
+        "Missing IDs:",
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0, 0, 0),
+        2,
+    )
+    cv2.putText(
+        missing_img,
+        ", ".join(map(str, missing)) if missing else "None",
+        (20, 90),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (0, 0, 0),
+        2,
+    )
+    cv2.imwrite(str(debug_root / "tag_missing_ids.png"), missing_img)
 
 
 def detect_pieces_two_stage(
