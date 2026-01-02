@@ -18,7 +18,10 @@ def detect_pieces_tags(
     warped_board: np.ndarray,
     frame_idx: int,
     output_dir: str,
-    tag_family: str = 'apriltag36h11'
+    tag_family: str = 'apriltag36h11',
+    min_area_ratio: float = 0.0005,
+    enable_clahe: bool = True,
+    enable_threshold: bool = True,
 ) -> Dict[str, any]:
     """
     使用 ArUco/AprilTag 检测棋子 ID
@@ -43,6 +46,9 @@ def detect_pieces_tags(
         warped_board=warped_board,
         frame_idx=frame_idx,
         output_dir=output_path,
+        min_area_ratio=min_area_ratio,
+        enable_clahe=enable_clahe,
+        enable_threshold=enable_threshold,
     )
 
     piece_centers_map = [[None for _ in range(8)] for _ in range(8)]

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import json
 import subprocess
@@ -5,6 +7,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Generator, List, Optional, Tuple
+
+import pandas as pd
 
 BASE_OUTDIR = Path("out/runs")
 
@@ -24,7 +28,7 @@ def create_run_dir() -> Tuple[Path, str]:
 
 def save_uploaded_file(uploaded_file, run_dir: Path) -> Path:
     suffix = Path(uploaded_file.name).suffix or ".mp4"
-    dest = run_dir / f"input{suffix}"
+    dest = run_dir / f"input_video{suffix}"
     with dest.open("wb") as f:
         f.write(uploaded_file.getbuffer())
     return dest
@@ -101,6 +105,7 @@ def key_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
         "stable": find_first_image(debug_dir / "stable_frames"),
         "warped": find_first_image(debug_dir / "warped_boards"),
         "tag_overlay": tag_overlay if tag_overlay and tag_overlay.exists() else None,
+        "grid": debug_dir / "grid_overlay.png" if (debug_dir / "grid_overlay.png").exists() else None,
     }
 
 
@@ -122,6 +127,20 @@ def load_board_grid(board_path: Path) -> Optional[List[List[int]]]:
     return None
 
 
+def load_board_sequences(board_path: Path) -> List[List[List[int]]]:
+    if not board_path.exists():
+        return []
+    try:
+        data = json.loads(board_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and "piece_ids" in data:
+        return [data["piece_ids"]]
+    return []
+
+
 def zip_run_directory(run_dir: Path) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -130,3 +149,60 @@ def zip_run_directory(run_dir: Path) -> bytes:
                 zf.write(file_path, arcname=file_path.relative_to(run_dir))
     buffer.seek(0)
     return buffer.read()
+
+
+def load_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def list_images(directory: Path) -> List[Path]:
+    images: List[Path] = []
+    if directory.exists():
+        for pattern in ("*.png", "*.jpg", "*.jpeg"):
+            images.extend(sorted(directory.glob(pattern)))
+    return images
+
+
+def describe_run(run_dir: Path) -> Dict[str, str]:
+    meta = load_run_metadata(run_dir)
+    report = ""
+    if (run_dir / "TAG_CHECK.html").exists():
+        report = "TAG_CHECK.html"
+    elif (run_dir / "CHECK.html").exists():
+        report = "CHECK.html"
+    return {
+        "run_id": run_dir.name,
+        "input_file": meta.get("input_file", ""),
+        "mode": meta.get("mode", ""),
+        "timestamp": meta.get("timestamp", ""),
+        "report": report,
+    }
+
+
+def run_history() -> List[Dict[str, str]]:
+    return [describe_run(path) for _, path in discover_runs()]
+
+
+def load_json(path: Path) -> Dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def board_to_table(board_ids: List[List[int]]) -> List[Dict[str, int]]:
+    rows = []
+    for ridx, row in enumerate(board_ids):
+        row_label = str(8 - ridx)
+        entry = {"rank": row_label}
+        for cidx, pid in enumerate(row):
+            entry[chr(ord("A") + cidx)] = pid
+        rows.append(entry)
+    return rows

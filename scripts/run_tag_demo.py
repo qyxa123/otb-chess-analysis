@@ -193,6 +193,8 @@ def main() -> None:
     parser.add_argument("--motion-threshold", type=float, default=0.01, help="Motion threshold for stable frames")
     parser.add_argument("--stable-duration", type=float, default=0.7, help="Seconds of stability before capture")
     parser.add_argument("--tag-sensitivity", type=float, default=1.0, help="Multiplier for tag detector area filter")
+    parser.add_argument("--disable-clahe", action="store_true", help="Skip CLAHE preprocessing")
+    parser.add_argument("--disable-threshold-path", action="store_true", help="Skip threshold/OTSU candidate path")
     parser.add_argument("--save-debug", action="store_true", default=True, help="Save debug overlays")
     parser.add_argument("--no-save-debug", dest="save_debug", action="store_false")
     args = parser.parse_args()
@@ -210,6 +212,22 @@ def main() -> None:
 
     saved_input = _copy_input(input_path, run_dir)
     print(f"输入文件已保存到 {saved_input}")
+
+    run_meta = {
+        "run_id": run_dir.name,
+        "input_file": input_path.name,
+        "mode": "Tag mode",
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "params": {
+            "fps": args.fps,
+            "motion_threshold": args.motion_threshold,
+            "stable_duration": args.stable_duration,
+            "tag_sensitivity": args.tag_sensitivity,
+            "clahe": not args.disable_clahe,
+            "threshold_path": not args.disable_threshold_path,
+        },
+    }
+    (run_dir / "run_meta.json").write_text(json.dumps(run_meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print("[1/5] 抽取稳定帧…")
     stable_frames = extract_stable_frames_debug(
@@ -261,7 +279,14 @@ def main() -> None:
     overlay_files: List[Path] = []
     warnings: List[str] = []
     for idx, warped in warped_boards:
-        state = detect_pieces_tags(warped, idx, str(overlays_dir), min_area_ratio=0.0005 * args.tag_sensitivity)
+        state = detect_pieces_tags(
+            warped,
+            idx,
+            str(overlays_dir),
+            min_area_ratio=0.0005 * args.tag_sensitivity,
+            enable_clahe=not args.disable_clahe,
+            enable_threshold=not args.disable_threshold_path,
+        )
         board_states.append(state)
         overlay_files.append(overlays_dir / f"overlay_{idx + 1:04d}.png")
         warnings.extend(state.get("tag_warnings", []))

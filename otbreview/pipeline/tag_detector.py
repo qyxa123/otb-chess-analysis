@@ -42,6 +42,8 @@ def detect_piece_tags(
     tag_size_mm: float = 3.0,
     expected_square_mm: float = 50.0,
     denoise: bool = True,
+    enable_clahe: bool = True,
+    enable_threshold: bool = True,
 ) -> TagDetectResult:
     """检测矫正棋盘上的棋子标签，并输出8x8矩阵。
 
@@ -70,22 +72,13 @@ def detect_piece_tags(
     min_area = size * size * min_area_ratio
 
     gray = cv2.cvtColor(warped_board, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
+    clahe_img = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray) if enable_clahe else gray
+    enhanced = clahe_img
     equalized = cv2.equalizeHist(gray)
     processed_base = cv2.fastNlMeansDenoising(enhanced, None, 7, 7, 21) if denoise else enhanced
 
     # 强反光检测：高亮区域占比过大时，额外尝试阈值化路径
     highlight_ratio = float((gray > 235).mean())
-    adaptive = cv2.adaptiveThreshold(
-        processed_base,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        15,
-        2,
-    )
-    otsu_val, otsu = cv2.threshold(equalized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if highlight_ratio > 0.25:
         warnings.append(f"High glare ratio {highlight_ratio:.2f}, trying threshold path")
 
@@ -93,9 +86,22 @@ def detect_piece_tags(
         ("enhanced", processed_base, 1.0),
         ("upsampled", cv2.resize(processed_base, None, fx=1.4, fy=1.4, interpolation=cv2.INTER_CUBIC), 1.4),
         ("upsampled2", cv2.resize(processed_base, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC), 1.8),
-        ("threshold", adaptive, 1.0),
-        ("otsu", otsu, 1.0),
     ]
+
+    if enable_threshold:
+        adaptive = cv2.adaptiveThreshold(
+            processed_base,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            15,
+            2,
+        )
+        otsu_val, otsu = cv2.threshold(equalized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        processed_candidates.extend([
+            ("threshold", adaptive, 1.0),
+            ("otsu", otsu, 1.0),
+        ])
 
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
     params = aruco.DetectorParameters()

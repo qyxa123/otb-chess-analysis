@@ -12,18 +12,17 @@
 - 🔧 **纠错机制**：低置信度走法可手动修正
 - 🏷️ **棋子贴码识别**：支持1-32号棋子贴纸，逐帧还原piece_id网格并解码走法
 
-## Beginner: 3 steps to run
+## Beginner (3 steps)
 
-1. **Install once**（建议新建虚拟环境）：
+1. **Install Stockfish + ffmpeg** (macOS):
    ```bash
-   pip install -r requirements_computer.txt
-   pip install -r requirements_dashboard.txt
+   brew install stockfish ffmpeg
    ```
-2. **一键启动本地仪表盘**：
+2. **Launch the studio app** (creates venv + installs deps):
    ```bash
-   ./scripts/start_dashboard.sh
+   ./scripts/start_studio.sh
    ```
-3. **浏览器里完成所有操作**：上传视频 → 选择 Marker / Tag 模式 → 点击 Run。所有输出会自动落盘到 `out/runs/<时间戳>/`，包含输入视频、副本、调试图、game.pgn、analysis.json、index.html、CHECK.html/TAG_CHECK.html。
+3. **Use the browser only**: upload video → choose Marker / Tag → click **Analyze** → hit **Open Review**. Outputs land in `out/runs/<run_id>/` with input_video copy, debug images, game.pgn, analysis.json, index.html, CHECK/TAG_CHECK reports.
 
 ## 快速开始
 
@@ -42,6 +41,48 @@ streamlit run dashboard_local/app.py
 - **Upload & Run**：上传 mp4/mov，选择 Marker Mode（仅四角）或 Tag Mode（棋子标签），可调 FPS 采样、稳定阈值、标签灵敏度，点击 Run 即刻执行原有 CLI 流程。
 - **Results / Replay**：自动展示稳定帧、warp、grid_overlay.png、aruco_preview.png；Tag 模式额外显示 tag_overlays、8×8 ID 表格、TAG_CHECK/CHECK 内嵌报告，并提供 PGN、board_ids.json、tag_metrics.csv、整包 ZIP 下载。
 - **History**：列出 `out/runs/` 内历史 run_id、输入名、PASS/FAIL，点击 Open 可跳转重播。
+
+### OTBReview Studio（Streamlit，多页）
+
+- 入口：`streamlit run dashboard/app.py` 或直接执行 `./scripts/start_studio.sh`。
+- 侧边栏页面：
+  1) **Home / New Analysis**：上传/拖拽视频，选择模式，展开 Advanced 设置 FPS、motion threshold、tag 预处理开关，点击 **Analyze**。
+  2) **Review**：自动查找 `out/runs/<run_id>/index.html` 并内嵌播放，展示优势曲线、命中率、moves 列表、PGN/analysis.json/ZIP 下载。
+  3) **Debug Lab**：开发者工具，批量预览 stable/warp/tag overlay、展示 `debug/tag_metrics.csv`、逐帧 board_ids 表格、单帧 rerun 检测与自动诊断（角点缺失、标签过少、重复 ID）。
+  4) **Corrections**：人工修正棋盘/走法：编辑 8×8 ID 网格（可加载标准开局映射），保存为 `board_ids_override.json` 并重新解码；在低置信度步数手动替换 SAN 并重新生成 PGN/analysis.json。
+
+### Debug Lab 使用
+
+- 选择 run_id 浏览 `debug/stable_frames/` 与 `debug/tag_overlays/` 缩略图。
+- 展示 `tag_metrics.csv` 的角点/标签统计，自动提示低角点/低 ID/重复 ID，并附录诊断建议。
+- 选择任意稳定帧，一键重跑角点+warp，并可追加标签检测以快速验证调参。
+- 选择帧索引查看 8×8 board_ids 表格，结合 `TAG_CHECK.html` 诊断覆盖率。
+
+### Corrections 工作流
+
+- 在 **Corrections** 选择 run_id → 指定稳定帧 → 逐格修改 ID（0 表示空）。
+- 点击保存后会写入 `board_ids_override.json`，并从该帧开始重新解码、生成新的 `game.pgn`、`moves.json`、`analysis.json`。
+- 如某步置信度低，可在 Move-level correction 里选择合法 SAN 替换，重新计算后续分析。
+
+### Run 文件夹结构
+
+每次运行都会标准化输出到 `out/runs/<run_id>/`：
+
+```
+out/runs/<run_id>/
+  input_video.<ext>
+  debug/
+    stable_frames/
+    warped_boards/
+    tag_overlays/
+    tag_metrics.csv
+  board_ids.json
+  game.pgn
+  analysis.json
+  index.html
+  CHECK.html or TAG_CHECK.html
+  run_meta.json
+```
 
 ### Tag 模式入门
 
