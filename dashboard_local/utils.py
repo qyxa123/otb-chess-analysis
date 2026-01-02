@@ -1,3 +1,7 @@
+"""Helper utilities for the Streamlit dashboard."""
+
+from __future__ import annotations
+
 import io
 import json
 import subprocess
@@ -5,6 +9,9 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Generator, List, Optional, Tuple
+
+import chess
+import chess.pgn
 
 BASE_OUTDIR = Path("out/web_runs")
 
@@ -127,6 +134,22 @@ def find_first_image(directory: Path) -> Optional[Path]:
     return None
 
 
+def gather_tag_overlays(debug_dir: Path) -> List[Path]:
+    overlays_dir = debug_dir / "tag_overlays"
+    overlays = sorted(overlays_dir.glob("overlay_*.png")) if overlays_dir.exists() else []
+    return overlays
+
+
+def load_board_ids(run_dir: Path) -> Optional[List[List[int]]]:
+    for candidate in [run_dir / "board_ids.json", run_dir / "debug" / "board_ids.json"]:
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+    return None
+
+
 def key_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
     debug = run_dir / "debug"
     return {
@@ -154,3 +177,62 @@ def zip_run_directory(run_dir: Path) -> bytes:
                 zf.write(file_path, arcname=file_path.relative_to(run_dir))
     buffer.seek(0)
     return buffer.read()
+
+
+def parse_pgn_advantage(pgn_path: Path) -> Dict[str, object]:
+    """Lightweight chess.com-style metrics using material evaluation.
+
+    The app intentionally keeps the logic local and lightweight so users do not
+    need to download engines. We approximate evaluation using material balance
+    per ply and surface friendly summaries for the dashboard.
+    """
+
+    if not pgn_path.exists():
+        return {}
+
+    game = chess.pgn.read_game(io.StringIO(pgn_path.read_text(encoding="utf-8")))
+    if game is None:
+        return {}
+
+    board = game.board()
+    evals: List[float] = []
+    labels: List[str] = []
+    material_values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+
+    def _material_score(bd: chess.Board) -> float:
+        score = 0
+        for square, piece in bd.piece_map().items():
+            val = material_values.get(piece.piece_type, 0)
+            score += val if piece.color == chess.WHITE else -val
+        return float(score * 100)
+
+    best_label_counts = {"Brilliant": 0, "Great": 0, "Best": 0, "Good": 0, "Mistake": 0, "Blunder": 0, "Miss": 0}
+    from game_review import GameReviewFormatter
+
+    prev_eval = _material_score(board)
+    san_moves: List[str] = []
+    for idx, move in enumerate(game.mainline_moves()):
+        san_moves.append(board.san(move))
+        eval_before = prev_eval
+        board.push(move)
+        eval_after = _material_score(board)
+        swing = eval_after - eval_before
+        label = GameReviewFormatter.label_move(swing if (idx % 2 == 0) else -swing)
+        best_label_counts[label] = best_label_counts.get(label, 0) + 1
+        labels.append(label)
+        evals.append(eval_after)
+        prev_eval = eval_after
+
+    if not evals:
+        return {}
+
+    accuracy_white = max(0.0, 100.0 - sum(abs(x) for i, x in enumerate(evals) if i % 2 == 0) / (len(evals) or 1) / 10)
+    accuracy_black = max(0.0, 100.0 - sum(abs(x) for i, x in enumerate(evals) if i % 2 == 1) / (len(evals) or 1) / 10)
+
+    return {
+        "evals": evals,
+        "labels": labels,
+        "accuracy": {"white": round(accuracy_white, 1), "black": round(accuracy_black, 1)},
+        "label_counts": best_label_counts,
+        "moves": san_moves,
+    }

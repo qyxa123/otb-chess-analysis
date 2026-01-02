@@ -25,16 +25,17 @@ def _write_metrics(
     debug_dir: Path,
 ) -> Path:
     metrics_path = debug_dir / "tag_metrics.csv"
-    rows = ["frame_index,num_corner_markers,num_piece_tags,num_unique_piece_ids,confidence_flag"]
+    rows = ["frame_index,num_corner_markers,num_piece_tags,num_unique_piece_ids,coverage_ratio,confidence_flag"]
     for idx, state in enumerate(board_states):
         grid = state.get("piece_ids", [])
         flat = [pid for row in grid for pid in row if pid]
         unique = len(set(flat))
+        coverage = len(flat) / 32 if grid else 0
         confidence_flag = ""
         if idx == 0 and unique < 20:
             confidence_flag = "LOW_CONFIDENCE"
         rows.append(
-            f"{idx},{corner_counts[idx] if idx < len(corner_counts) else 0},{len(flat)},{unique},{confidence_flag}"
+            f"{idx},{corner_counts[idx] if idx < len(corner_counts) else 0},{len(flat)},{unique},{coverage:.3f},{confidence_flag}"
         )
 
     metrics_path.write_text("\n".join(rows), encoding="utf-8")
@@ -112,6 +113,7 @@ def main() -> None:
     parser.add_argument("--fps", type=float, default=3.0, help="Target FPS for stable frames")
     parser.add_argument("--motion-threshold", type=float, default=0.01, help="Motion threshold for stable frames")
     parser.add_argument("--stable-duration", type=float, default=0.7, help="Seconds of stability before capture")
+    parser.add_argument("--tag-sensitivity", type=float, default=1.0, help="Multiplier for tag detector area filter")
     parser.add_argument("--save-debug", action="store_true", default=True, help="Save debug overlays")
     parser.add_argument("--no-save-debug", dest="save_debug", action="store_false")
     args = parser.parse_args()
@@ -178,7 +180,7 @@ def main() -> None:
     board_states: List[Dict] = []
     overlay_files: List[Path] = []
     for idx, warped in warped_boards:
-        state = detect_pieces_tags(warped, idx, str(overlays_dir))
+        state = detect_pieces_tags(warped, idx, str(overlays_dir), min_area_ratio=0.0005 * args.tag_sensitivity)
         board_states.append(state)
         overlay_files.append(overlays_dir / f"overlay_{idx + 1:04d}.png")
 
@@ -191,6 +193,10 @@ def main() -> None:
         moves, confidence = decode_moves_from_tags(board_states, output_dir=str(debug_dir))
         pgn = generate_pgn(moves)
         (run_dir / "game.pgn").write_text(pgn, encoding="utf-8")
+        from otbreview.pipeline.pgn import generate_moves_json
+
+        moves_json = generate_moves_json(moves)
+        (run_dir / "moves.json").write_text(json.dumps(moves_json, indent=2), encoding="utf-8")
         (debug_dir / "step_confidence.json").write_text(json.dumps(confidence, indent=2), encoding="utf-8")
     except Exception as exc:  # pragma: no cover - 解码失败不阻断整体流程
         print(f"  PGN解码失败: {exc}")

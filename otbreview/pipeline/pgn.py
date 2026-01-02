@@ -6,7 +6,7 @@ PGN生成模块
 import chess
 import chess.pgn
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Any
 
 
 def generate_pgn(moves: List[str]) -> str:
@@ -54,4 +54,34 @@ def generate_pgn(moves: List[str]) -> str:
         game.headers["Result"] = "1/2-1/2"
     
     return str(game)
+
+
+def generate_moves_json(moves: List[str]) -> List[Dict[str, Any]]:
+    """Return a detailed move trace with SAN/UCI/FEN for each ply."""
+
+    board = chess.Board()
+    trace: List[Dict[str, Any]] = []
+    for move_san in moves:
+        if move_san == "??":
+            continue
+        parsed_move = None
+        try:
+            parsed_move = board.parse_san(move_san)
+        except ValueError:
+            try:
+                parsed_move = chess.Move.from_uci(move_san)
+                if parsed_move not in board.legal_moves:
+                    parsed_move = None
+            except ValueError:
+                parsed_move = None
+
+        if parsed_move is None:
+            continue
+
+        san = board.san(parsed_move)
+        uci = parsed_move.uci()
+        board.push(parsed_move)
+        trace.append({"san": san, "uci": uci, "fen": board.fen()})
+
+    return trace
 

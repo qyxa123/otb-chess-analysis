@@ -63,6 +63,8 @@ def detect_piece_tags(
     if allowed_ids is None:
         allowed_ids = list(range(1, 33))
 
+    warnings: List[str] = []
+
     size = warped_board.shape[0]
     cell = size / 8.0
     min_area = size * size * min_area_ratio
@@ -70,6 +72,7 @@ def detect_piece_tags(
     gray = cv2.cvtColor(warped_board, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
+    equalized = cv2.equalizeHist(gray)
     processed_base = cv2.fastNlMeansDenoising(enhanced, None, 7, 7, 21) if denoise else enhanced
 
     # 强反光检测：高亮区域占比过大时，额外尝试阈值化路径
@@ -82,11 +85,16 @@ def detect_piece_tags(
         15,
         2,
     )
+    otsu_val, otsu = cv2.threshold(equalized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if highlight_ratio > 0.25:
+        warnings.append(f"High glare ratio {highlight_ratio:.2f}, trying threshold path")
 
     processed_candidates: List[Tuple[str, np.ndarray, float]] = [
         ("enhanced", processed_base, 1.0),
         ("upsampled", cv2.resize(processed_base, None, fx=1.4, fy=1.4, interpolation=cv2.INTER_CUBIC), 1.4),
+        ("upsampled2", cv2.resize(processed_base, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC), 1.8),
         ("threshold", adaptive, 1.0),
+        ("otsu", otsu, 1.0),
     ]
 
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
@@ -120,11 +128,11 @@ def detect_piece_tags(
             unique_ids > best_unique
             or (unique_ids == best_unique and len(dets) > len(best_detections))
             or (unique_ids == best_unique and len(dets) == len(best_detections) and total_score > best_score)
+            or (not best_detections and dets)
         ):
             best_detections = dets
             best_key = name
 
-    warnings: List[str] = []
     if best_key == "threshold":
         warnings.append("阈值化路径自动启用，可能存在反光")
     if highlight_ratio > 0.02:
@@ -215,9 +223,10 @@ def detect_piece_tags(
     )
 
     avg_side = _average_side_length(final_dets)
-    if avg_side and avg_side < 8:
+    expected_px = (tag_size_mm / expected_square_mm) * cell if expected_square_mm else 0
+    if avg_side and avg_side < max(8, expected_px * 0.8):
         warnings.append(
-            f"标签在画面中边长仅 {avg_side:.1f}px，可能过小导致误检"
+            f"标签在画面中边长仅 {avg_side:.1f}px，期望至少 {expected_px:.1f}px，可能过小导致误检"
         )
 
     return TagDetectResult(
