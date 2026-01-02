@@ -1,0 +1,36 @@
+[
+  {
+    "eco": "C60",
+    "name": "Ruy Lopez: Morphy Defense",
+    "moves": "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6",
+    "white_win_rate": 0.52,
+    "black_win_rate": 0.32,
+    "draw_rate": 0.16,
+    "plans": ["White targets e5 and controls center", "Black challenges bishop with ...a6"],
+    "notable_games": [
+      {
+        "event": "World Championship 2006",
+        "players": "Kramnik vs Topalov",
+        "result": "1-0",
+        "summary": "Kramnik used the Ruy Lopez to build a kingside initiative."
+      }
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian Defense",
+    "moves": "1. e4 d5",
+    "white_win_rate": 0.47,
+    "black_win_rate": 0.35,
+    "draw_rate": 0.18,
+    "plans": ["Black challenges center immediately", "White gains tempi attacking the queen"],
+    "notable_games": [
+      {
+        "event": "Legends Rapid 2020",
+        "players": "Carlsen vs Nakamura",
+        "result": "1-0",
+        "summary": "Carlsen exploited development lead against the early queen."
+      }
+    ]
+  }
+]

@@ -1,0 +1,9 @@
+[Event "Sample Game"]
+[Site "Local"]
+[Date "2024.01.01"]
+[Round "1"]
+[White "WhitePlayer"]
+[Black "BlackPlayer"]
+[Result "1-0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 7. Bb3 d6 8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 11. c4 Bb7 12. cxb5 axb5 13. Nc3 b4 14. Nd5 Nxd5 15. exd5 f5 16. dxe5 dxe5 17. d6+ Kh8 18. dxe7 Qxe7 19. Nxe5 Nxe5 20. Bf4 Rad8 21. Qe2 Qh4 22. Qxe5 Rd6 23. Rac1 Rg6 24. Bg3 Qh5 25. Rxc7 Ba8 26. Rf7 Rg8 27. Rc1 h6 28. Rcc7 Be4 29. Rxg7 R8xg7 30. Rc8+ Kh7 31. Bg8+ Rxg8 32. Rc7+ R8g7 33. Rxg7+ Rxg7 34. Qf6 Qd1+ 35. Kh2 Qd5 36. Be5 Rxg2+ 37. Kh1 Rg6+ 38. f3 Qxf3+ 39. Kh2 Qg2# 0-1
