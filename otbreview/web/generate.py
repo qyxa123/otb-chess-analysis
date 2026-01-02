@@ -14,7 +14,8 @@ def generate_web_replay(
     pgn_path: str,
     analysis_path: str,
     output_path: str,
-    confidence: Optional[List[Dict]] = None
+    confidence: Optional[List[Dict]] = None,
+    tag_board_path: Optional[str] = None
 ) -> str:
     """
     生成网页复盘HTML文件
@@ -42,8 +43,17 @@ def generate_web_replay(
     moves_list = analysis_data.get('moves', [])
     key_moves = analysis_data.get('keyMoves', [])
     
+    tag_data = None
+    if tag_board_path:
+        tag_path = Path(tag_board_path)
+        if tag_path.exists():
+            try:
+                tag_data = json.loads(tag_path.read_text(encoding='utf-8'))
+            except json.JSONDecodeError:
+                tag_data = None
+
     # 生成HTML
-    html_content = _generate_html(game, moves_list, key_moves, confidence or [])
+    html_content = _generate_html(game, moves_list, key_moves, confidence or [], tag_data)
     
     # 保存文件
     output_file = Path(output_path)
@@ -58,7 +68,8 @@ def _generate_html(
     game: chess.pgn.Game,
     moves_list: List[Dict],
     key_moves: List[int],
-    confidence: List[Dict]
+    confidence: List[Dict],
+    tag_data: Optional[Dict]
 ) -> str:
     """
     生成HTML内容
@@ -101,7 +112,9 @@ def _generate_html(
             eval_data.append({'cp': None, 'mate': eval_mate})
         else:
             eval_data.append({'cp': eval_cp, 'mate': None})
-    
+
+    tag_json = json.dumps(tag_data or {}, ensure_ascii=False)
+
     # 嵌入HTML模板
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -244,11 +257,68 @@ def _generate_html(
         .classification.mistake {{ background: #ff9800; }}
         .classification.blunder {{ background: #f44336; }}
         .classification.book {{ background: #9c27b0; }}
-        
+
         .fix-button {{
             background: #ff6b6b;
             font-size: 12px;
             padding: 4px 8px;
+        }}
+
+        .tag-viewer {{
+            margin-top: 30px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 16px;
+        }}
+
+        .tag-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }}
+
+        .tag-layout {{
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 16px;
+            align-items: start;
+        }}
+
+        .tag-overlay img {{
+            width: 100%;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #111;
+        }}
+
+        table.tag-grid {{
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 8px;
+        }}
+
+        table.tag-grid td {{
+            border: 1px solid #555;
+            text-align: center;
+            padding: 4px;
+            width: 30px;
+            height: 30px;
+            font-weight: bold;
+        }}
+
+        .tag-map {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }}
+
+        .tag-chip {{
+            background: #444;
+            border-radius: 4px;
+            padding: 4px 6px;
+            font-size: 12px;
         }}
     </style>
 </head>
@@ -282,12 +352,31 @@ def _generate_html(
             <div id="current-analysis"></div>
         </div>
     </div>
-    
+
+    <div class="tag-viewer" id="tag-viewer">
+        <div class="tag-header">
+            <h2>Tag Overlay Viewer</h2>
+            <select id="tag-frame-select"></select>
+        </div>
+        <div class="tag-layout">
+            <div class="tag-overlay">
+                <img id="tag-overlay-img" alt="tag overlay" />
+            </div>
+            <div>
+                <h4>8x8 piece_id 表格</h4>
+                <table class="tag-grid" id="tag-grid"></table>
+                <h4 style="margin-top: 12px;">ID 映射</h4>
+                <div class="tag-map" id="tag-map"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const movesData = {json.dumps(moves_data, ensure_ascii=False)};
         const keyMoves = {key_moves};
         const evalData = {json.dumps(eval_data, ensure_ascii=False)};
-        
+        const tagData = {tag_json};
+
         let currentMoveIndex = 0;
         let game = new Chess();
         
@@ -430,12 +519,72 @@ def _generate_html(
             // TODO: 实现PV播放
             alert('Follow-up功能待实现');
         }}
-        
+
+        function initTagViewer() {{
+            const viewer = document.getElementById('tag-viewer');
+            if (!tagData || !tagData.frames || tagData.frames.length === 0) {{
+                viewer.style.display = 'none';
+                return;
+            }}
+
+            const select = document.getElementById('tag-frame-select');
+            select.innerHTML = '';
+            tagData.frames.forEach((frame, idx) => {{
+                const option = document.createElement('option');
+                option.value = idx;
+                option.textContent = `帧 ${{idx}} (${{frame.frame || ''}})`;
+                select.appendChild(option);
+            }});
+
+            select.onchange = renderTagFrame;
+            renderTagFrame();
+            renderTagMap();
+        }}
+
+        function renderTagFrame() {{
+            if (!tagData || !tagData.frames || tagData.frames.length === 0) return;
+            const select = document.getElementById('tag-frame-select');
+            const idx = parseInt(select.value || '0', 10);
+            const frame = tagData.frames[Math.max(0, Math.min(idx, tagData.frames.length - 1))];
+            const img = document.getElementById('tag-overlay-img');
+            if (frame.overlay) {{
+                img.src = frame.overlay;
+            }}
+            img.alt = frame.frame || '';
+
+            const grid = document.getElementById('tag-grid');
+            grid.innerHTML = '';
+            (frame.board_ids || []).forEach((row) => {{
+                const tr = document.createElement('tr');
+                row.forEach((cell) => {{
+                    const td = document.createElement('td');
+                    td.textContent = cell === 0 ? '' : cell;
+                    tr.appendChild(td);
+                }});
+                grid.appendChild(tr);
+            }});
+        }}
+
+        function renderTagMap() {{
+            const mapEl = document.getElementById('tag-map');
+            mapEl.innerHTML = '';
+            if (!tagData || !tagData.piece_map) return;
+
+            Object.entries(tagData.piece_map).forEach(([pid, info]) => {{
+                const chip = document.createElement('div');
+                chip.className = 'tag-chip';
+                const name = info.name ? ` (${{info.name}})` : '';
+                chip.textContent = `ID ${{pid}}: ${{info.symbol}} @ ${{info.square}}${{name}}`;
+                mapEl.appendChild(chip);
+            }});
+        }}
+
         // 初始化
         initBoard();
         updateMoveList();
         updateEval();
         updateAnalysis();
+        initTagViewer();
     </script>
 </body>
 </html>
