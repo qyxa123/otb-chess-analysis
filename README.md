@@ -14,6 +14,38 @@
 
 ## 快速开始
 
+### 全新本地仪表盘（推荐）
+
+一键启动浏览器端 UI，免命令行：
+
+```bash
+pip install -r requirements_computer.txt
+pip install -r requirements_dashboard.txt
+streamlit run dashboard_local/app.py
+```
+
+进入首页后可见三个标签页：
+
+- **Upload & Run**：上传 mp4/mov，选择 Marker Mode（仅四角）或 Tag Mode（棋子标签），可调 FPS 采样、稳定阈值、标签灵敏度，点击 Run 即刻执行原有 CLI 流程。
+- **Results / Replay**：自动展示稳定帧、warp、grid_overlay.png、aruco_preview.png；Tag 模式额外显示 tag_overlays、8×8 ID 表格、TAG_CHECK/CHECK 内嵌报告，并提供 PGN、board_ids.json、tag_metrics.csv、整包 ZIP 下载。
+- **History**：列出 `out/web_runs/` 内历史 run_id、输入名、PASS/FAIL，点击 Open 可跳转重播。
+
+### Tag 模式入门
+
+- 运行命令：`python scripts/run_tag_demo.py --input your_video.mp4 --outdir out/web_runs/<run_id>`（或通过 Dashboard 选择 Tag Mode）。
+- 关键输出：`TAG_CHECK.html`（首帧角点=4 且唯一 ID ≥28 视为 PASS）、`board_ids.json`、`debug/tag_metrics.csv`、`debug/tag_overlay.png`/`tag_overlay_zoom.png`/`tag_grid.png`/`tag_missing_ids.txt`。
+- 可视化说明：
+  - **tag_overlay.png**：warp 棋盘上叠加网格和检测到的 ID；`tag_overlay_zoom.png` 为 2× 放大。
+  - **tag_grid.png**：8×8 表格写入每格 ID，方便人工核对。
+  - **tag_overlays/overlay_xxxx.png**：逐帧叠加预览；缺失 ID 列表保存在 `tag_missing_ids.txt`。
+- TAG_CHECK.html：内嵌首帧关键图和指标 CSV。PASS 规则：首帧角点数 >=4 且唯一 ID 数 >=28。
+
+### 录制与摆放指引
+
+- 机位：保持四角 ArUco 0/1/2/3 全入镜，俯拍或轻微斜角；避免强反光。
+- 标签尺寸：3mm–5mm 贴纸均可；若 TAG_CHECK 报“小于期望像素”则需要更高分辨率或靠近镜头。
+- 光照：使用柔光或漫反射，必要时给棋子加磨砂罩；画面过曝会自动启用阈值路径但准确度下降。
+
 ### 棋子贴码识别版（Tag 模式）
 
 该模式假设棋盘四角贴有 ArUco 0/1/2/3 用于 warp，对每个棋子顶部贴 1-32 号小标签。流程保持本地离线，无需网络。
