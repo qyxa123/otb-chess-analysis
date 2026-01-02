@@ -4,13 +4,15 @@
 用于打印并贴在棋子顶部，实现ID识别
 """
 
-import cv2
-import numpy as np
 import argparse
 from pathlib import Path
+
+import cv2
+import numpy as np
 from fpdf import FPDF
 
-def generate_tags(family='apriltag36h11', size_mm=5, start_id=1, count=32, output_dir='assets/piece_tags'):
+
+def generate_tags(family='aruco5x5_100', size_mm=5, start_id=1, count=32, output_dir='assets/piece_tags'):
     """
     生成指定系列的标签
     默认使用 AprilTag 36h11 (更小、抗干扰强)
@@ -21,26 +23,24 @@ def generate_tags(family='apriltag36h11', size_mm=5, start_id=1, count=32, outpu
     png_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Generating {count} tags ({family}) starting from ID {start_id}...")
-    
+
     # 初始化字典
-    if 'aruco' in family.lower():
-        if '4x4' in family:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-        elif '5x5' in family:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50)
-        else:
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_ARUCO_ORIGINAL)
-    else:
-        # Default to AprilTag 36h11 via ArUco dict (OpenCV > 4.7 supports AprilTag dicts)
+    if '5x5' in family:
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
+    elif '6x6' in family:
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+    elif 'apriltag' in family.lower():
         try:
             dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
         except AttributeError:
-            print("Warning: DICT_APRILTAG_36h11 not found in cv2.aruco. Falling back to DICT_4X4_50.")
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+            print("Warning: DICT_APRILTAG_36h11 not found, falling back to 5x5_100")
+            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
+    else:
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
     # 生成每个ID的图片
     tag_files = []
-    pixel_size = 200 # 高分辨率用于打印
+    pixel_size = 200  # 高分辨率用于打印
     
     for i in range(count):
         tag_id = start_id + i
@@ -85,9 +85,11 @@ def create_pdf_sheet(tag_files, output_path, size_mm):
         
         # 绘制边框（方便剪裁）
         pdf.rect(x, y, size_mm, size_mm)
-        
+        # 外围裁切参考框
+        pdf.rect(x - 0.5, y - 0.5, size_mm + 1, size_mm + 1, style='D')
+
         # 绘制ID编号（下方）
-        pdf.text(x, y + size_mm + 3, str(tag_id))
+        pdf.text(x, y + size_mm + 3, f"ID {tag_id}")
         
         # 移动坐标
         x += size_mm + spacing + 5 # 额外留白方便剪
@@ -100,10 +102,10 @@ def create_pdf_sheet(tag_files, output_path, size_mm):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate ArUco/AprilTag tags for chess pieces")
-    parser.add_argument("--family", default="apriltag36h11", help="Tag family (apriltag36h11, aruco4x4, etc)")
-    parser.add_argument("--tag-size-mm", type=int, default=5, help="Physical size of the tag in mm")
+    parser.add_argument("--family", default="aruco5x5_100", help="Tag family (aruco5x5_100, apriltag36h11, etc)")
+    parser.add_argument("--size-mm", type=int, default=5, help="Physical size of the tag in mm (recommend 5 then try 3)")
     parser.add_argument("--count", type=int, default=32, help="Number of tags to generate (default 32 for full set)")
-    
+
     args = parser.parse_args()
-    
-    generate_tags(family=args.family, size_mm=args.tag_size_mm, count=args.count)
+
+    generate_tags(family=args.family, size_mm=args.size_mm, count=args.count)

@@ -75,6 +75,12 @@ def main():
         default=1,
         help='是否使用ArUco标记 (0=否, 1=是，默认1)'
     )
+    parser.add_argument(
+        '--fps',
+        type=float,
+        default=10.0,
+        help='稳定帧抽取的目标FPS（默认10）'
+    )
     
     args = parser.parse_args()
     
@@ -108,7 +114,8 @@ def main():
     stable_frames = extract_stable_frames_debug(
         video_path=video_path,
         output_dir=str(debug_dir / "stable_frames"),
-        motion_csv_path=str(debug_dir / "motion.csv")
+        motion_csv_path=str(debug_dir / "motion.csv"),
+        target_fps=args.fps,
     )
     
     print(f"\n抽取到 {len(stable_frames)} 个稳定帧")

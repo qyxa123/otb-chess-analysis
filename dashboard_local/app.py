@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -6,158 +7,140 @@ import streamlit as st
 from dashboard_local.utils import (
     create_run_dir,
     discover_runs,
-    find_first_image,
-    list_artifacts,
+    key_artifacts,
     load_run_metadata,
-    parse_check_status,
+    run_status,
     save_uploaded_file,
     stream_process,
     write_run_metadata,
+    zip_run_directory,
 )
 
-st.set_page_config(page_title="OTBReview Local", layout="wide")
+
+st.set_page_config(page_title="OTBReview Beginner Dashboard", layout="wide")
 
 
-def run_pipeline(input_path: Path, outdir: Path, use_markers: bool) -> bool:
-    st.write("### Running debug pipeline...")
-    cmd = [
-        "python",
-        "scripts/run_debug_pipeline.py",
-        "--input",
-        str(input_path),
-        "--outdir",
-        str(outdir),
-        "--use_markers",
-        "1" if use_markers else "0",
-    ]
-
+def _stream_logs(cmd):
     log_placeholder = st.empty()
     log_lines = []
-    success = True
-
     process_stream = stream_process(cmd)
     for line in process_stream:
         log_lines.append(line)
         log_placeholder.code("\n".join(log_lines[-200:]), language="bash")
     if log_lines:
         log_placeholder.code("\n".join(log_lines[-200:]), language="bash")
+    return getattr(process_stream, "returncode", 0), "\n".join(log_lines)
 
-    if getattr(process_stream, "returncode", 0) not in (0, None):
-        success = False
-    if log_lines and any("错误" in ln or "fail" in ln.lower() for ln in log_lines):
-        success = False
 
-    # Generate check report regardless of success
-    st.write("### Generating CHECK.html report...")
-    report_cmd = [
+def run_marker_pipeline(input_path: Path, run_dir: Path, fps: float, save_debug: bool) -> bool:
+    st.write("### Running Marker Mode…")
+    cmd = [
         "python",
-        "scripts/make_check_report.py",
+        "scripts/run_debug_pipeline.py",
+        "--input",
+        str(input_path),
         "--outdir",
-        str(outdir),
+        str(run_dir),
+        "--use_markers",
+        "1",
+        "--fps",
+        str(fps),
     ]
-    report_stream = stream_process(report_cmd)
-    for line in report_stream:
-        log_lines.append(line)
-        log_placeholder.code("\n".join(log_lines[-200:]), language="bash")
-    if getattr(report_stream, "returncode", 0) not in (0, None):
-        success = False
-
-    return success
+    code, logs = _stream_logs(cmd)
+    st.write("### Generating CHECK.html…")
+    report_cmd = ["python", "scripts/make_check_report.py", "--outdir", str(run_dir)]
+    code2, logs2 = _stream_logs(report_cmd)
+    return code == 0 and code2 == 0 and "fail" not in (logs + logs2).lower()
 
 
-def display_images(run_dir: Path):
-    debug_dir = run_dir / "debug"
-    col1, col2 = st.columns(2)
-
-    grid_overlay = debug_dir / "grid_overlay.png"
-    if grid_overlay.exists():
-        col1.image(str(grid_overlay), caption="grid_overlay.png", use_column_width=True)
-    else:
-        col1.info("grid_overlay.png not found")
-
-    aruco_preview = debug_dir / "aruco_preview.png"
-    if aruco_preview.exists():
-        col2.image(str(aruco_preview), caption="aruco_preview.png", use_column_width=True)
-    else:
-        col2.info("aruco_preview.png not found")
-
-    col3, col4 = st.columns(2)
-    warped = find_first_image(debug_dir / "warped_boards")
-    if warped:
-        col3.image(str(warped), caption=f"warped_boards/{warped.name}", use_column_width=True)
-    else:
-        col3.info("No warped board images found")
-
-    stable = find_first_image(debug_dir / "stable_frames")
-    if stable:
-        col4.image(str(stable), caption=f"stable_frames/{stable.name}", use_column_width=True)
-    else:
-        col4.info("No stable frames found")
+def run_tag_pipeline(input_path: Path, run_dir: Path, fps: float, save_debug: bool) -> bool:
+    st.write("### Running Tag Mode…")
+    cmd = [
+        "python",
+        "scripts/run_tag_demo.py",
+        "--input",
+        str(input_path),
+        "--outdir",
+        str(run_dir),
+        "--fps",
+        str(fps),
+    ]
+    if not save_debug:
+        cmd.append("--no-save-debug")
+    code, logs = _stream_logs(cmd)
+    return code == 0 and "fail" not in logs.lower()
 
 
-def render_check_html(run_dir: Path):
-    check_path = run_dir / "CHECK.html"
-    if not check_path.exists():
-        st.warning("CHECK.html not found. Try rerunning the report generator.")
-        return
-    html_content = check_path.read_text(encoding="utf-8", errors="ignore")
-    st.components.v1.html(html_content, height=800, scrolling=True)
-    st.markdown(f"[Open in browser]({check_path.resolve().as_uri()})")
+def sidebar_history():
+    st.sidebar.title("Runs history")
+    runs = discover_runs()
+    if not runs:
+        st.sidebar.info("No runs yet")
+        return None
+    labels = []
+    mapping = {}
+    for run_id, path in runs:
+        meta = load_run_metadata(path)
+        status = run_status(path)
+        name = meta.get("input_file", path.name)
+        ts = meta.get("timestamp", run_id)
+        label = f"{run_id} | {name} | {status}"
+        labels.append(label)
+        mapping[label] = path
+        st.sidebar.write(f"**{run_id}**  ")
+        st.sidebar.caption(f"{name} • {ts} • {status}")
+    selected = st.sidebar.radio("Select a run to open", labels, index=0 if labels else None)
+    st.sidebar.markdown("---")
+    return mapping.get(selected)
 
 
-def artifact_browser(run_dir: Path):
-    st.write("### Artifacts")
-    artifacts = list_artifacts(run_dir)
-    if not artifacts:
-        st.info("No artifacts found yet.")
-        return
-    for rel, path in artifacts:
-        with st.expander(rel, expanded=False):
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-                st.image(str(path), caption=rel, use_column_width=True)
-            elif path.suffix.lower() in {".json", ".txt", ".csv", ".pgn"}:
-                try:
-                    st.code(path.read_text(encoding="utf-8", errors="ignore")[:4000])
-                except Exception:
-                    st.info("Preview unavailable")
-            with open(path, "rb") as f:
-                st.download_button(
-                    label="Download",
-                    data=f,
-                    file_name=path.name,
-                    mime="application/octet-stream",
-                    key=f"download-{rel}",
-                )
-
-
-def home_tab():
-    st.title("OTBReview Local")
-    st.markdown(
-        """
-        **Quick Start (3 steps)**
-        1. Install dependencies (see README) and start this dashboard.
-        2. Upload your chess video (.mp4/.mov/.mkv).
-        3. Click **Run Debug Pipeline** then view the generated report.
-        """
+def show_results(run_dir: Path):
+    meta = load_run_metadata(run_dir)
+    st.subheader(f"Run: {run_dir.name}")
+    st.caption(
+        f"Input: {meta.get('input_file', 'unknown')} • Mode: {meta.get('mode', 'n/a')} • Timestamp: {meta.get('timestamp', '')}"
     )
 
+    artifacts = key_artifacts(run_dir)
+    cols = st.columns(3)
+    for idx, key in enumerate(["stable", "warped", "grid", "aruco", "tag_overlay", "tag_zoom", "tag_grid"]):
+        if artifacts.get(key):
+            cols[idx % 3].image(str(artifacts[key]), caption=Path(artifacts[key]).name, use_column_width=True)
 
-def upload_and_run_tab():
+    reports = []
+    if (run_dir / "TAG_CHECK.html").exists():
+        reports.append(("TAG_CHECK", run_dir / "TAG_CHECK.html"))
+    if (run_dir / "CHECK.html").exists():
+        reports.append(("CHECK", run_dir / "CHECK.html"))
+
+    for title, path in reports:
+        st.markdown(f"#### {title}")
+        try:
+            st.components.v1.html(path.read_text(encoding="utf-8", errors="ignore"), height=600, scrolling=True)
+        except Exception:
+            st.warning("Preview not available; open in browser below")
+        st.markdown(f"[Open in browser]({path.resolve().as_uri()})")
+
+    st.markdown("### Downloads")
+    zip_bytes = zip_run_directory(run_dir)
+    st.download_button("Download full ZIP", data=zip_bytes, file_name=f"{run_dir.name}.zip")
+    for fname in ["game.pgn", "board_ids.json", "debug/board_ids.json", "debug/tag_metrics.csv"]:
+        fpath = run_dir / fname
+        if fpath.exists():
+            with open(fpath, "rb") as f:
+                st.download_button(f"Download {fname}", data=f, file_name=fpath.name, key=f"dl-{fname}")
+
+
+def upload_and_run(selected_run: Optional[Path]):
     st.header("Upload & Run")
     uploaded_file = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "MP4", "MOV", "MKV"])
+    mode = st.radio("Mode", ["Marker mode (corners only)", "Tag mode (corners + piece tags)"])
+    fps = st.number_input("FPS for stable frames", min_value=1.0, max_value=12.0, value=3.0, step=0.5)
+    save_debug = st.checkbox("Save debug overlays", value=True)
 
-    mode = st.radio(
-        "Mode",
-        options=["Marker mode (ArUco corners)", "Tag mode (piece tags + corners)"],
-        help="Marker mode uses ArUco corner markers (0/1/2/3). Tag mode expects piece tags plus corners.",
-    )
-    # Both modes rely on the corner markers for warp; Tag mode simply assumes piece tags are also present.
-    use_markers = True
-
-    run_button = st.button("Run Debug Pipeline", type="primary", use_container_width=True)
-    if run_button:
+    if st.button("Run", type="primary", use_container_width=True):
         if uploaded_file is None:
-            st.error("Please upload a video file first.")
+            st.error("Please upload a video first")
             return
         run_dir, run_id = create_run_dir()
         input_path = save_uploaded_file(uploaded_file, run_dir)
@@ -166,88 +149,35 @@ def upload_and_run_tab():
             {
                 "run_id": run_id,
                 "input_file": uploaded_file.name,
-                "mode": mode,
+                "mode": "Tag" if "Tag" in mode else "Marker",
+                "timestamp": datetime.now().isoformat(),
             },
         )
-
         st.success(f"Saved upload to {input_path}")
-        success = run_pipeline(input_path=input_path, outdir=run_dir, use_markers=use_markers)
-        if success:
-            st.success("Pipeline completed. See Results tab.")
+        success = False
+        if "Tag" in mode:
+            success = run_tag_pipeline(input_path, run_dir, fps, save_debug)
         else:
-            st.warning("Pipeline finished with warnings or errors. Check logs and artifacts.")
+            success = run_marker_pipeline(input_path, run_dir, fps, save_debug)
+
         st.session_state["selected_run"] = run_dir
-
-
-def results_tab():
-    st.header("Results")
-    runs = discover_runs()
-    if not runs:
-        st.info("No runs yet. Upload a video in the Upload & Run tab.")
-        return
-
-    default_run = st.session_state.get("selected_run")
-    options = {f"{run_id}": path for run_id, path in runs}
-    default_key: Optional[str] = None
-    if default_run:
-        for run_id, path in runs:
-            if path == default_run:
-                default_key = run_id
-                break
-    labels = list(options.keys())
-    index = 0
-    if default_key in labels:
-        index = labels.index(default_key)
-    selected_label = st.selectbox("Select run", labels, index=index)
-    run_dir = options[selected_label]
-    st.session_state["selected_run"] = run_dir
-
-    meta = load_run_metadata(run_dir)
-    st.write(
-        f"**Run ID:** {selected_label}  |  **Input:** {meta.get('input_file', 'unknown')}  |  **Mode:** {meta.get('mode', 'n/a')}"
-    )
-
-    display_images(run_dir)
-    render_check_html(run_dir)
-    artifact_browser(run_dir)
-
-
-def history_tab():
-    st.header("History")
-    runs = discover_runs()
-    if not runs:
-        st.info("No history yet. Runs will appear here after you process a video.")
-        return
-
-    for run_id, path in runs:
-        meta = load_run_metadata(path)
-        check_status = parse_check_status(path / "CHECK.html") or "Unknown"
-        with st.expander(f"{run_id} | {meta.get('input_file', 'unknown')} | Status: {check_status}"):
-            st.write(f"Mode: {meta.get('mode', 'n/a')}")
-            st.button(
-                "Open in Results",
-                key=f"open-{run_id}",
-                on_click=lambda p=path: st.session_state.update({"selected_run": p, "active_tab": "Results"}),
-            )
+        if success:
+            st.success("Pipeline completed!")
+        else:
+            st.warning("Pipeline finished with warnings. Check logs and reports.")
 
 
 def main():
-    tab_names = ["Home", "Upload & Run", "Results", "History"]
-    active_tab = st.session_state.get("active_tab", tab_names[0])
-    tabs = st.tabs(tab_names)
-
+    selected_from_sidebar = sidebar_history()
+    tabs = st.tabs(["Upload & Run", "Results"])
     with tabs[0]:
-        home_tab()
-        st.session_state["active_tab"] = "Home"
+        upload_and_run(selected_from_sidebar)
     with tabs[1]:
-        upload_and_run_tab()
-        st.session_state["active_tab"] = "Upload & Run"
-    with tabs[2]:
-        results_tab()
-        st.session_state["active_tab"] = "Results"
-    with tabs[3]:
-        history_tab()
-        st.session_state["active_tab"] = "History"
+        run_dir: Optional[Path] = st.session_state.get("selected_run") or selected_from_sidebar
+        if run_dir and Path(run_dir).exists():
+            show_results(Path(run_dir))
+        else:
+            st.info("Select or create a run to view results")
 
 
 if __name__ == "__main__":

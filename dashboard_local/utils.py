@@ -1,5 +1,7 @@
+import io
 import json
 import subprocess
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Generator, List, Optional, Tuple
@@ -29,11 +31,8 @@ def save_uploaded_file(uploaded_file, run_dir: Path) -> Path:
 
 
 def stream_process(command: List[str], cwd: Optional[Path] = None) -> Generator[str, None, None]:
-    """Run a subprocess and yield log lines as they appear.
+    """Run a subprocess and yield log lines as they appear."""
 
-    The returned generator exposes a ``returncode`` attribute after the
-    process ends, so callers can check success without buffering output.
-    """
     process = subprocess.Popen(
         command,
         cwd=str(cwd) if cwd else None,
@@ -96,6 +95,17 @@ def parse_check_status(check_path: Path) -> Optional[str]:
     return None
 
 
+def parse_tag_status(tag_path: Path) -> Optional[str]:
+    if not tag_path.exists():
+        return None
+    content = tag_path.read_text(encoding="utf-8", errors="ignore").lower()
+    if "pass" in content and "needs attention" not in content:
+        return "PASS"
+    if "need" in content or "fail" in content:
+        return "FAIL"
+    return None
+
+
 def list_artifacts(run_dir: Path) -> List[Tuple[str, Path]]:
     artifacts = []
     for path in sorted(run_dir.rglob("*")):
@@ -115,3 +125,32 @@ def find_first_image(directory: Path) -> Optional[Path]:
         if matches:
             return matches[0]
     return None
+
+
+def key_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
+    debug = run_dir / "debug"
+    return {
+        "stable": find_first_image(debug / "stable_frames"),
+        "warped": find_first_image(debug / "warped_boards"),
+        "grid": debug / "grid_overlay.png" if (debug / "grid_overlay.png").exists() else None,
+        "aruco": debug / "aruco_preview.png" if (debug / "aruco_preview.png").exists() else None,
+        "tag_overlay": debug / "tag_overlay_0001.png" if (debug / "tag_overlay_0001.png").exists() else None,
+        "tag_zoom": debug / "tag_overlay_zoom_0001.png" if (debug / "tag_overlay_zoom_0001.png").exists() else None,
+        "tag_grid": debug / "tag_grid_0001.png" if (debug / "tag_grid_0001.png").exists() else None,
+    }
+
+
+def run_status(run_dir: Path) -> str:
+    tag_status = parse_tag_status(run_dir / "TAG_CHECK.html")
+    check_status = parse_check_status(run_dir / "CHECK.html")
+    return tag_status or check_status or "PENDING"
+
+
+def zip_run_directory(run_dir: Path) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in run_dir.rglob("*"):
+            if file_path.is_file():
+                zf.write(file_path, arcname=file_path.relative_to(run_dir))
+    buffer.seek(0)
+    return buffer.read()

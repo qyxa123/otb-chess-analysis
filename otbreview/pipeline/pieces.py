@@ -56,6 +56,7 @@ def detect_pieces_tags(
             board_ids=result.board_ids,
             output_path=output_path,
             detections=result.detections,
+            overlay_path=result.overlay_path,
         )
 
     return {
@@ -72,12 +73,17 @@ def _save_first_frame_views(
     board_ids: List[List[int]],
     output_path: Path,
     detections,
+    overlay_path: Optional[Path] = None,
 ) -> None:
     """为首帧输出额外的视觉包，便于快速人工校验。"""
 
-    overlay_path = output_path / "overlay_0000.png"
-    if overlay_path.exists():
-        overlay = cv2.imread(str(overlay_path))
+    overlay_candidate = overlay_path if overlay_path and overlay_path.exists() else None
+    if overlay_candidate is None:
+        fallback = sorted(output_path.glob("overlay_*.png"))
+        overlay_candidate = fallback[0] if fallback else None
+
+    if overlay_candidate and overlay_candidate.exists():
+        overlay = cv2.imread(str(overlay_candidate))
     else:
         overlay = warped_board
 

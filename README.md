@@ -16,39 +16,34 @@
 
 ### 棋子贴码识别版（Tag 模式）
 
-该模式假设棋盘四角贴有ArUco 0/1/2/3用于warp对齐，棋子顶部贴1-32号小tag用于定位身份。
+该模式假设棋盘四角贴有 ArUco 0/1/2/3 用于 warp，对每个棋子顶部贴 1-32 号小标签。流程保持本地离线，无需网络。
 
-流程概览：
+**一键命令（含 TAG_CHECK.html 报告）**
 
-1. **稳定帧抽取**：沿用现有`extract_stable_frames`，保持fps与阈值逻辑不变。
-2. **棋盘warp**：在每个稳定帧上检测0-3号ArUco四角，warp到800x800。
-3. **标签检测**：在warp图上检测1-32号标签，过滤太小的框并输出中心坐标与ID；同一格子/同一ID冲突时取面积更大的检测。
-4. **落格映射**：按 `col=floor(x/(size/8)), row=floor(y/(size/8))` 生成8x8的piece_id矩阵，保存为`debug/board_ids.json`。
-5. **可视化**：在`debug/tag_overlays/`输出每帧`overlay_xxxx.png`，`debug/tag_overlay.png`为第一帧示例，同时保存8x8矩阵。
-6. **走法解码**：利用`config/piece_id_map.json`中的ID→棋子映射，用python-chess比对相邻两帧的piece_id变化，自动推断走法（含吃子、易位、升变）。
-7. **输出**：生成`game.pgn`，`analysis.json`以及带「Tag Overlay Viewer」的网页复盘（`index.html`）。
+```bash
+python scripts/run_tag_demo.py --input your_game.mp4 --outdir out/web_runs/demo --fps 3
+```
 
-默认ID映射（可在`config/piece_id_map.json`里修改）：
+输出目录会包含：
 
-- 1-8：白方a2-h2兵；9-10：白车（a1/h1）；11-12：白马（b1/g1）；13-14：白象（c1/f1）；15：后；16：王。
-- 17-24：黑方a7-h7兵；25-26：黑车（a8/h8）；27-28：黑马（b8/g8）；29-30：黑象（c8/f8）；31：后；32：王。
+- `TAG_CHECK.html`：汇总 PASS/FAIL（四角==4 且首帧唯一 ID ≥28）、指标表格与关键叠加图。
+- `board_ids.json`：每个稳定帧的 8x8 piece_id 矩阵（根目录 & debug 下各一份）。
+- `debug/tag_metrics.csv`：逐帧 corner/tag 计数与置信标记（首帧 <20 个唯一 ID 会标记 LOW_CONFIDENCE）。
+- `debug/tag_overlay_0001.png`、`tag_overlay_zoom_0001.png`、`tag_grid_0001.png`、`tag_missing_ids_0001.txt`：首帧可视化包，前 5 帧依次编号。
+- `debug/tag_overlays/overlay_xxxx.png`：每帧 warp 上叠加的网格+ID 预览。
+- （可选）`game.pgn`、`debug/step_confidence.json`：若解码成功则自动生成。
 
-网页复盘新增「Tag Overlay Viewer」页签：可选择帧查看`overlay`叠加图和8x8 piece_id表格，并在侧边展示ID映射，方便核对检测结果。
+**录制与摆放建议（3-5mm 标签）**
 
-#### Tag Mode: 3mm Setup + Recording Tips + Acceptance Criteria
+- 建议先打印 5mm 标签，熟悉后再尝试 3mm；摄像机距离越近、分辨率越高越稳定。
+- 控光：避免直射高光，可在棋子顶部覆一层磨砂透明贴；保持俯拍或轻微斜角，四角 ArUco 0/1/2/3 全部入镜。
+- 如果标签看起来只有几像素，TAG_CHECK 会给出 “标签过小” 警告，可提升分辨率或靠近拍摄。
+- 默认 `--fps 3 --motion-threshold 0.01 --stable-duration 0.7`，如场景干扰大可适当提高阈值或缩短稳定时间。
 
-- **录制建议**：
-  - 3mm 标签对分辨率和对焦要求更高，建议 1080p 以上、靠近棋盘拍摄，并避免强烈金属反光（可在棋子顶部粘一层磨砂透明贴减反）。
-  - 确保四角 ArUco 0/1/2/3 全部入镜；轻微侧角 OK，但不要大幅倾斜或运动模糊。
-  - 如环境噪声大可适当缩短稳定阈值（`--motion-threshold 0.01 --stable-duration 0.5` 为默认）。
-- **校验一键命令**：
-  - 运行 `python scripts/run_tag_demo.py --input <video> --outdir out/tag_demo`。
-  - 输出目录包含 `TAG_CHECK.html`（嵌入 overlay/zoom/grid/missing 图）、`debug/tag_metrics.csv`、`debug/board_ids.json`、`debug/tag_overlays/overlay_xxxx.png`。
-- **自动验收标准（TAG_CHECK.html 顶部 PASS）**：
-  - 检测到 4 个角标；
-  - 第一帧识别到 ≥28 个唯一棋子 ID，覆盖率 >0.7；
-  - `tag_metrics.csv` 中起始帧未出现 `LOW CONFIDENCE` 警告。
-- **人工快速查看**：首帧的 `tag_overlay.png`、`tag_overlay_zoom.png`、`tag_grid.png`、`tag_missing_ids.png` 位于 `debug/` 目录，无需读代码即可核对识别结果。
+默认 ID 映射（可在 `config/piece_id_map.json` 修改）：
+
+- 1-8：白兵；9-10：白车；11-12：白马；13-14：白象；15：白后；16：白王。
+- 17-24：黑兵；25-26：黑车；27-28：黑马；29-30：黑象；31：黑后；32：黑王。
 
 ### 网页界面（小白推荐）
 
@@ -76,25 +71,27 @@
 
 ## Local Web Dashboard (Beginner)
 
-为完全小白准备的本地可视化入口，无需记命令行即可跑完整的 debug pipeline 并查看验收报告。
+最简单的入口：上传视频、点「Run」，即可在浏览器里直接看到结果和报告。
 
-1. 安装依赖
-   ```bash
-   pip install -r requirements_computer.txt
-   pip install -r requirements_dashboard.txt
-   ```
+1) 安装依赖（本地离线运行）
+```bash
+pip install -r requirements_computer.txt
+pip install -r requirements_dashboard.txt
+```
 
-2. 启动仪表盘（默认 http://localhost:8501 ）
-   ```bash
-   ./scripts/start_dashboard.sh
-   ```
+2) 启动仪表盘
+```bash
+streamlit run dashboard_local/app.py
+# 或使用一键脚本
+./scripts/start_dashboard.sh
+```
 
-3. 使用流程
-   - Home 页展示 3 步新手引导
-   - "Upload & Run" 上传 .mp4/.mov/.mkv，选择 Marker/Tag 模式，一键运行 debug pipeline
-   - 运行日志实时展示，结束后自动生成 `CHECK.html`
-   - "Results" 可直接预览 `grid_overlay.png`、`aruco_preview.png`、第一张 warp/stable 帧以及内嵌 CHECK 报告，还可以下载所有产物
-   - "History" 会罗列 `out/web_runs/` 的历史任务，可一键跳转到对应结果
+3) 浏览器操作
+- 侧边栏自动读取 `out/web_runs/<run_id>` 历史任务：显示输入文件名、时间戳和 PASS/FAIL 状态，点击即可切换。
+- 主界面上传 .mp4/.mov，选择模式：
+  - **Marker mode**：仅四角 0/1/2/3 warp，调用 `run_debug_pipeline.py` + `make_check_report.py`，生成 CHECK.html。
+  - **Tag mode**：角点 + 1..32 棋子标签，调用 `run_tag_demo.py`，生成 TAG_CHECK.html、board_ids.json、tag_metrics.csv、可下载 PGN/ZIP。
+- 运行过程实时刷日志；完成后自动切换到结果页，内嵌 CHECK/TAG_CHECK 报告、关键图片，并提供 ZIP/PGN/CSV/JSON 下载。
 
 
 ### 前置要求
@@ -130,21 +127,21 @@ pip install -r requirements.txt
 
 ### Print Piece Tags
 
-- 默认标签尺寸为 **5mm x 5mm**（推荐）。如果棋子顶部空间有限可选 **3mm**，但检测容错会更小。
-- 将标签贴在棋子顶部，尽量保持水平，避免强烈反光；贴好后检查标签边界不要被弯折或遮挡。
+- 默认标签尺寸 **5mm x 5mm**（推荐），想要更隐蔽可用 `--size-mm 3` 再试。
+- 将标签贴在棋子顶部，保持水平、避免反光；打印时选择 100% 真实尺寸。
 - 生成打印文件：
 
 ```bash
-# 生成 32 张 PNG 标签 + A4 PDF 排版（AprilTag 36h11，默认 5mm）
+# 生成 32 张 PNG + A4 PDF（aruco5x5_100，默认 5mm）
 python scripts/generate_piece_tags.py
 
-# 如果需要 ArUco 4x4 或 5x5，可指定 family，同时修改打印尺寸（单位：mm）
-python scripts/generate_piece_tags.py --family aruco5x5 --tag-size-mm 3
+# 指定尺寸 3mm 或其他 family
+python scripts/generate_piece_tags.py --family aruco5x5_100 --size-mm 3
 ```
 
 输出目录：
 - `assets/piece_tags/png/tag_01.png ... tag_32.png`
-- `assets/piece_tags/piece_tags_print_sheet.pdf`（包含裁切线与编号，直接打印 A4）
+- `assets/piece_tags/piece_tags_print_sheet.pdf`（带裁切线和编号，A4）
 
 ### 使用方法
 
