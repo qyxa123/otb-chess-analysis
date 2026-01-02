@@ -59,6 +59,28 @@
    - 点击 "🚀 Run Analysis"
    - 等待运行完成，直接查看 PGN 和调试图片
 
+## Local Web Dashboard (Beginner)
+
+为完全小白准备的本地可视化入口，无需记命令行即可跑完整的 debug pipeline 并查看验收报告。
+
+1. 安装依赖
+   ```bash
+   pip install -r requirements_computer.txt
+   pip install -r requirements_dashboard.txt
+   ```
+
+2. 启动仪表盘（默认 http://localhost:8501 ）
+   ```bash
+   ./scripts/start_dashboard.sh
+   ```
+
+3. 使用流程
+   - Home 页展示 3 步新手引导
+   - "Upload & Run" 上传 .mp4/.mov/.mkv，选择 Marker/Tag 模式，一键运行 debug pipeline
+   - 运行日志实时展示，结束后自动生成 `CHECK.html`
+   - "Results" 可直接预览 `grid_overlay.png`、`aruco_preview.png`、第一张 warp/stable 帧以及内嵌 CHECK 报告，还可以下载所有产物
+   - "History" 会罗列 `out/web_runs/` 的历史任务，可一键跳转到对应结果
+
 
 ### 前置要求
 
