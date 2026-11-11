@@ -6,6 +6,7 @@ from pathlib import Path
 import streamlit as st
 
 from dashboard.utils import (
+    BASE_OUTDIR,
     key_artifacts,
     list_images,
     load_board_sequences,
@@ -26,7 +27,7 @@ if not run_ids:
     st.stop()
 
 selected_id = st.selectbox("Select run", run_ids)
-run_dir = Path("out/runs") / selected_id
+run_dir = BASE_OUTDIR / selected_id
 
 debug_dir = run_dir / "debug"
 st.divider()
@@ -43,12 +44,17 @@ if artifacts.get("tag_overlay"):
     cols[3].image(str(artifacts["tag_overlay"]), caption="Tag overlay")
 
 st.markdown("### Stable frames")
-st.image([str(p) for p in list_images(debug_dir / "stable_frames")[:12]], width=140)
+stable_images = list_images(debug_dir / "stable_frames")[:12]
+if stable_images:
+    st.image([str(p) for p in stable_images], width=140)
 
 st.markdown("### Tag overlays (first five)")
-st.image([str(p) for p in list_images(debug_dir / "tag_overlays")[:5]], width=180)
+overlay_images = list_images(debug_dir / "tag_overlays")[:5]
+if overlay_images:
+    st.image([str(p) for p in overlay_images], width=180)
 
 metrics = load_csv(debug_dir / "tag_metrics.csv")
+metrics = metrics.rename(columns={"corner_markers": "corners_detected", "tag_ids": "num_unique_ids"})
 if not metrics.empty:
     st.markdown("### tag_metrics.csv")
     st.dataframe(metrics)
@@ -69,7 +75,7 @@ board_seq = load_board_sequences(run_dir / "board_ids.json")
 if not board_seq:
     board_seq = load_board_sequences(debug_dir / "board_ids.json")
 if board_seq:
-    frame_idx = st.slider("Frame index", 0, len(board_seq) - 1, 0)
+    frame_idx = st.slider("Frame index", 0, len(board_seq) - 1, 0) if len(board_seq) > 1 else 0
     st.table(board_seq[frame_idx])
 else:
     st.info("board_ids.json missing. Run tag mode first.")
@@ -97,9 +103,11 @@ if submit and stable_frame:
                 0,
                 str(tmpdir_path),
                 tag_family="aruco5x5_100",
-                min_area_ratio=0.0005 * sensitivity,
+                min_area_ratio=0.00005 * sensitivity,
             )
-            st.image(str(tmpdir_path / "overlay_0001.png"), caption="Tag overlay (rerun)")
+            rerun_overlays = list_images(tmpdir_path)
+            if rerun_overlays:
+                st.image(str(rerun_overlays[0]), caption="Tag overlay (rerun)")
             st.json({"unique_ids": len({pid for row in state['piece_ids'] for pid in row if pid}), "warnings": state.get("tag_warnings", [])})
 
 st.divider()

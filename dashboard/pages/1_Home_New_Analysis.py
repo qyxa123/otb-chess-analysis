@@ -8,6 +8,7 @@ from pathlib import Path
 import streamlit as st
 
 from dashboard.utils import (
+    analysis_command,
     create_run_dir,
     key_artifacts,
     load_board_grid,
@@ -33,65 +34,13 @@ def _stream_logs(cmd):
     return getattr(process_stream, "returncode", 0), "\n".join(logs)
 
 
-def _run_marker_pipeline(input_path: Path, run_dir: Path, fps: float, motion_threshold: float) -> bool:
-    cmd = [
-        sys.executable,
-        "scripts/run_debug_pipeline.py",
-        "--input",
-        str(input_path),
-        "--outdir",
-        str(run_dir),
-        "--use_markers",
-        "1",
-        "--fps",
-        str(fps),
-    ]
-    st.info("Running marker pipeline…")
-    code1, logs1 = _stream_logs(cmd)
-
-    report_cmd = [sys.executable, "scripts/make_check_report.py", "--outdir", str(run_dir)]
-    st.info("Generating CHECK.html…")
-    code2, logs2 = _stream_logs(report_cmd)
-    return code1 == 0 and code2 == 0 and "fail" not in (logs1 + logs2).lower()
-
-
-def _run_tag_pipeline(
-    input_path: Path,
-    run_dir: Path,
-    fps: float,
-    motion_threshold: float,
-    stable_duration: float,
-    tag_sensitivity: float,
-    enable_clahe: bool,
-    enable_threshold: bool,
-) -> bool:
-    script_path = Path("scripts/run_tag_demo.py")
-    if not script_path.exists():
-        st.error("Tag pipeline script is missing.")
-        return False
-    cmd = [
-        sys.executable,
-        str(script_path),
-        "--input",
-        str(input_path),
-        "--outdir",
-        str(run_dir),
-        "--fps",
-        str(fps),
-        "--motion-threshold",
-        str(motion_threshold),
-        "--stable-duration",
-        str(stable_duration),
-        "--tag-sensitivity",
-        str(tag_sensitivity),
-    ]
-    if not enable_clahe:
-        cmd.append("--disable-clahe")
-    if not enable_threshold:
-        cmd.append("--disable-threshold-path")
-    st.info("Running tag pipeline…")
-    code, logs = _stream_logs(cmd)
-    return code == 0 and "fail" not in logs.lower()
+def _run_pipeline(input_path: Path, run_dir: Path, **params) -> bool:
+    code, logs = _stream_logs(analysis_command(input_path, run_dir, **params))
+    (run_dir / "logs.txt").write_text(logs, encoding="utf-8")
+    metadata = load_run_metadata(run_dir)
+    success = code == 0 and (run_dir / "game.pgn").exists() and (run_dir / "index.html").exists()
+    write_run_metadata(run_dir, {**metadata, "status": "complete" if success else "failed", "exit_code": code})
+    return success
 
 
 with st.sidebar:
@@ -104,7 +53,9 @@ with st.sidebar:
             st.write(f"**{item['run_id']}** — {item.get('mode','')} {item.get('input_file','')}")
 
 uploaded_file = st.file_uploader("Upload video", type=["mp4", "mov", "MP4", "MOV"])
-mode = st.radio("Mode", ["Marker mode", "Tag mode"], horizontal=True)
+mode = st.radio("Mode", ["Tag mode", "Marker mode (experimental)"], horizontal=True)
+
+st.caption("Tag mode requires corner markers 0–3 and piece tags 1–32. Marker mode uses experimental occupancy recognition.")
 
 with st.expander("Advanced", expanded=False):
     fps = st.slider("FPS sampling", 1.0, 12.0, 3.0, 0.5)
@@ -142,26 +93,20 @@ if run_clicked:
         st.success(f"Saved to {input_path}")
         success = False
         try:
-            if mode == "Tag mode":
-                success = _run_tag_pipeline(
-                    input_path,
-                    run_dir,
-                    fps=fps,
-                    motion_threshold=motion_threshold,
-                    stable_duration=stable_duration,
-                    tag_sensitivity=tag_sensitivity,
-                    enable_clahe=enable_clahe,
-                    enable_threshold=enable_threshold,
-                )
-            else:
-                success = _run_marker_pipeline(input_path, run_dir, fps=fps, motion_threshold=motion_threshold)
+            success = _run_pipeline(
+                input_path, run_dir, use_piece_tags=mode == "Tag mode",
+                fps=fps, motion_threshold=motion_threshold, stable_duration=stable_duration,
+                tag_sensitivity=tag_sensitivity, enable_clahe=enable_clahe,
+                enable_threshold=enable_threshold,
+            )
         except Exception as exc:  # noqa: BLE001
             st.error(f"Pipeline failed: {exc}")
+            write_run_metadata(run_dir, {**load_run_metadata(run_dir), "status": "failed", "error": str(exc)})
         st.session_state["selected_run"] = str(run_dir)
         if success:
             st.success("Run completed. Open Review below.")
         else:
-            st.warning("Run finished with warnings. Check logs above and reports below.")
+            st.error("Analysis failed. Check the logs above; no completed review is available.")
 
 if "selected_run" in st.session_state:
     selected_run = Path(st.session_state["selected_run"])
@@ -198,7 +143,8 @@ if "selected_run" in st.session_state:
                 st.components.v1.html(report.read_text(encoding="utf-8", errors="ignore"), height=600, scrolling=True)
             except Exception:
                 st.warning("Preview not available; open directly below.")
-            st.markdown(f"[Open in new tab]({report.resolve().as_uri()})")
-        st.link_button("Open Review page", href="/Review", type="primary")
+            st.download_button(f"Download {report.name}", report.read_bytes(), file_name=report.name)
+        if st.button("Open Review page", type="primary"):
+            st.switch_page("pages/2_Review.py")
     else:
         st.info("Select a previous run from the Review page or start a new one above.")

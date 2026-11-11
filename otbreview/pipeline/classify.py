@@ -9,6 +9,21 @@ import chess.pgn
 from typing import List, Dict
 
 
+def evaluation_cp(position: Dict) -> float:
+    """Read current and older analysis files, including terminal mate scores."""
+    cp = position.get('eval_cp')
+    if cp is not None:
+        return float(cp)
+    mate = position.get('eval_mate')
+    if mate is None:
+        return 0.0
+    if mate != 0:
+        return 100000.0 if mate > 0 else -100000.0
+    # Mate in zero means the side to move has already been checkmated.
+    fields = position.get('fen', '').split()
+    return -100000.0 if len(fields) > 1 and fields[1] == 'w' else 100000.0
+
+
 # 分类阈值（centipawn loss）
 THRESHOLDS = {
     'best': 0,      # 0 cp loss
@@ -32,9 +47,6 @@ def classify_moves(analysis: List[Dict]) -> List[Dict]:
         - 'cp_loss': float (相对于最佳走法的损失)
         - 'is_book': bool
     """
-    if len(analysis) < 2:
-        return analysis
-    
     classified = []
     
     for i in range(len(analysis)):
@@ -49,16 +61,29 @@ def classify_moves(analysis: List[Dict]) -> List[Dict]:
             continue
         
         # 计算cp loss
-        prev_eval = analysis[i-1]['eval_cp']
-        curr_eval = move_data['eval_cp']
+        prev_eval = evaluation_cp(analysis[i-1])
+        curr_eval = evaluation_cp(move_data)
         
         # 考虑走棋方
-        if i % 2 == 1:  # 白方走棋
+        mover_is_white = move_data.get('mover_is_white')
+        if mover_is_white is None:
+            fields = analysis[i-1].get('fen', '').split()
+            mover_is_white = fields[1] == 'w' if len(fields) > 1 else i % 2 == 1
+        if mover_is_white:
             cp_loss = prev_eval - curr_eval  # 白方希望eval增加
         else:  # 黑方走棋
             cp_loss = curr_eval - prev_eval  # 黑方希望eval减少
         
+        cp_loss = max(0.0, cp_loss)
         move_data['cp_loss'] = cp_loss
+        if move_data.get('analysis_source') == 'material':
+            # Material differences cannot identify tactical mistakes or accuracy.
+            move_data['cp_loss'] = None
+            move_data['classification'] = 'material'
+            move_data['is_book'] = False
+            move_data['evaluation_change_cp'] = curr_eval - prev_eval
+            classified.append(move_data)
+            continue
         
         # 检查是否是开局库走法
         is_book = _is_book_move(move_data.get('fen', ''), move_data.get('move_san', ''))

@@ -34,7 +34,14 @@ def analyze_command(args):
             outdir=str(outdir),
             use_markers=bool(args.use_markers),
             depth=args.depth,
-            pv_length=args.pv
+            pv_length=args.pv,
+            use_piece_tags=bool(args.use_piece_tags),
+            motion_threshold=args.motion_threshold,
+            stable_duration=args.stable_duration,
+            target_fps=args.fps,
+            tag_sensitivity=args.tag_sensitivity,
+            enable_clahe=not args.disable_clahe,
+            enable_threshold=not args.disable_threshold_path,
         )
         print(f"\n分析完成！结果保存在: {outdir}")
         print(f"打开 {outdir / 'index.html'} 查看复盘")
@@ -68,7 +75,8 @@ def watch_command(args):
             outroot_dir=str(outroot),
             use_markers=bool(args.use_markers),
             depth=args.depth,
-            pv_length=args.pv
+            pv_length=args.pv,
+            use_piece_tags=bool(args.use_piece_tags),
         )
     except KeyboardInterrupt:
         print("\n监控已停止")
@@ -104,7 +112,16 @@ def main():
     analyze_parser.add_argument('--input', '-i', required=True, help='输入视频文件路径')
     analyze_parser.add_argument('--outdir', '-o', required=True, help='输出目录')
     analyze_parser.add_argument('--use_markers', type=int, default=0, 
+                               choices=(0, 1),
                                help='是否使用ArUco/AprilTag标记 (0=否, 1=是)')
+    analyze_parser.add_argument('--use-piece-tags', type=int, choices=(0, 1), default=1,
+                                help='1=棋子标签识别，0=实验性占用识别')
+    analyze_parser.add_argument('--motion-threshold', type=float, default=0.01)
+    analyze_parser.add_argument('--stable-duration', type=float, default=0.5)
+    analyze_parser.add_argument('--fps', type=float, default=3.0, help='稳定帧采样FPS')
+    analyze_parser.add_argument('--tag-sensitivity', type=float, default=1.0)
+    analyze_parser.add_argument('--disable-clahe', action='store_true')
+    analyze_parser.add_argument('--disable-threshold-path', action='store_true')
     analyze_parser.add_argument('--depth', type=int, default=14, 
                                help='Stockfish分析深度 (默认: 14)')
     analyze_parser.add_argument('--pv', type=int, default=6, 
@@ -116,7 +133,9 @@ def main():
     watch_parser.add_argument('--inbox', required=True, help='监控的inbox目录路径')
     watch_parser.add_argument('--outroot', required=True, help='输出根目录')
     watch_parser.add_argument('--use_markers', type=int, default=0,
+                              choices=(0, 1),
                               help='是否使用ArUco/AprilTag标记 (0=否, 1=是)')
+    watch_parser.add_argument('--use-piece-tags', type=int, choices=(0, 1), default=1)
     watch_parser.add_argument('--depth', type=int, default=14,
                               help='Stockfish分析深度 (默认: 14)')
     watch_parser.add_argument('--pv', type=int, default=6,

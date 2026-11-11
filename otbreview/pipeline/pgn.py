@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 
-def generate_pgn(moves: List[str]) -> str:
+def generate_pgn(moves: List[str], initial_fen: str = None) -> str:
     """
     从走法列表生成PGN
     
@@ -20,6 +20,8 @@ def generate_pgn(moves: List[str]) -> str:
         PGN字符串
     """
     game = chess.pgn.Game()
+    if initial_fen is not None:
+        game.setup(chess.Board(initial_fen))
     game.headers["Event"] = "OTB Review"
     game.headers["Site"] = "?"
     game.headers["Date"] = datetime.now().strftime("%Y.%m.%d")
@@ -33,16 +35,17 @@ def generate_pgn(moves: List[str]) -> str:
     
     for move_san in moves:
         if move_san == "??":
-            # 无法解析的走法，跳过
-            continue
+            node.comment = (node.comment + " 识别到此中断：后续走法不确定，请人工核对。").strip()
+            break
         
         try:
             move = board.parse_san(move_san)
+            if move not in board.legal_moves:
+                raise ValueError("走法不合法")
             node = node.add_variation(move)
             board.push(move)
-        except ValueError:
-            # 无效走法，跳过
-            continue
+        except ValueError as exc:
+            raise ValueError(f"非法走法 {move_san!r}，当前局面: {board.fen()}") from exc
     
     # 确定结果
     if board.is_checkmate():
@@ -50,20 +53,20 @@ def generate_pgn(moves: List[str]) -> str:
             game.headers["Result"] = "0-1"
         else:
             game.headers["Result"] = "1-0"
-    elif board.is_stalemate() or board.is_insufficient_material() or board.is_seventy_five_moves():
+    elif board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves():
         game.headers["Result"] = "1/2-1/2"
     
     return str(game)
 
 
-def generate_moves_json(moves: List[str]) -> List[Dict[str, Any]]:
+def generate_moves_json(moves: List[str], initial_fen: str = None) -> List[Dict[str, Any]]:
     """Return a detailed move trace with SAN/UCI/FEN for each ply."""
 
-    board = chess.Board()
+    board = chess.Board(initial_fen) if initial_fen else chess.Board()
     trace: List[Dict[str, Any]] = []
     for move_san in moves:
         if move_san == "??":
-            continue
+            break
         parsed_move = None
         try:
             parsed_move = board.parse_san(move_san)
@@ -75,8 +78,8 @@ def generate_moves_json(moves: List[str]) -> List[Dict[str, Any]]:
             except ValueError:
                 parsed_move = None
 
-        if parsed_move is None:
-            continue
+        if parsed_move is None or parsed_move not in board.legal_moves:
+            raise ValueError(f"非法走法 {move_san!r}，当前局面: {board.fen()}")
 
         san = board.san(parsed_move)
         uci = parsed_move.uci()

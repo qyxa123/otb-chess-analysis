@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import List
@@ -8,7 +9,8 @@ import chess
 import chess.pgn
 import streamlit as st
 
-from dashboard.utils import load_board_sequences, load_json, run_history, write_run_metadata
+from dashboard.utils import BASE_OUTDIR, load_board_sequences, load_json, run_history, write_run_metadata
+from dashboard.correction_utils import regenerate_review, replace_move
 from otbreview.pipeline.decode import decode_moves_from_tags
 from otbreview.pipeline.pgn import generate_pgn, generate_moves_json
 from otbreview.pipeline.analyze import analyze_game
@@ -26,7 +28,7 @@ if not run_ids:
     st.stop()
 
 selected_id = st.selectbox("Select run", run_ids)
-run_dir = Path("out/runs") / selected_id
+run_dir = BASE_OUTDIR / selected_id
 
 def _save_override(board_states: List[List[List[int]]], selected_frame: int, edited_grid: List[List[int]]):
     override_path = run_dir / "board_ids_override.json"
@@ -55,7 +57,7 @@ def _render_board_editor(grid: List[List[int]]):
                     min_value=0,
                     max_value=32,
                     value=int(grid[r][c]) if grid else 0,
-                    key=f"cell_{r}_{c}",
+                    key=f"cell_{selected_id}_{frame_idx}_{r}_{c}",
                     step=1,
                 )
             )
@@ -63,46 +65,35 @@ def _render_board_editor(grid: List[List[int]]):
     return edited
 
 
-board_states = load_board_sequences(run_dir / "board_ids.json")
+board_states = load_board_sequences(run_dir / "board_ids_override.json")
+if not board_states:
+    board_states = load_board_sequences(run_dir / "board_ids.json")
 if not board_states:
     board_states = load_board_sequences(run_dir / "debug" / "board_ids.json")
 
 if not board_states:
-    st.error("No board_ids.json found for this run.")
-    st.stop()
+    st.info("No board IDs are available for this run. You can still correct its PGN below.")
+else:
+    frame_idx = st.slider("Stable frame to correct", 0, len(board_states) - 1, 0) if len(board_states) > 1 else 0
+    st.write(f"Editing frame #{frame_idx+1} / {len(board_states)}")
+    edited_grid = _render_board_editor(board_states[frame_idx])
 
-frame_idx = st.slider("Stable frame to correct", 0, len(board_states) - 1, 0)
-st.write(f"Editing frame #{frame_idx+1} / {len(board_states)}")
-edited_grid = _render_board_editor(board_states[frame_idx])
-
-if st.button("Save board_ids_override.json and re-decode", type="primary"):
-    override_path, payload = _save_override(board_states, frame_idx, edited_grid)
-    st.success(f"Saved overrides to {override_path}")
-    try:
-        wrapped_states = _wrap_states(payload)
-        moves, confidence = decode_moves_from_tags(wrapped_states[frame_idx:], output_dir=str(run_dir / "debug"))
-        pgn = generate_pgn(moves)
-        (run_dir / "game.pgn").write_text(pgn, encoding="utf-8")
-        moves_json = generate_moves_json(moves)
-        (run_dir / "moves.json").write_text(json.dumps(moves_json, indent=2), encoding="utf-8")
-        analysis_raw = analyze_game(str(run_dir / "game.pgn"))
-        classified = classify_moves(analysis=analysis_raw)
-        key_moves = find_key_moves(analysis=classified)
-        analysis = {"moves": classified, "keyMoves": key_moves, "metadata": {"source": "corrections"}}
-        analysis_path = run_dir / "analysis.json"
-        analysis_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
-        board_path = override_path if override_path.exists() else run_dir / "board_ids.json"
-        generate_web_replay(
-            pgn_path=str(run_dir / "game.pgn"),
-            analysis_path=str(analysis_path),
-            output_path=str(run_dir / "index.html"),
-            confidence=confidence,
-            tag_board_path=str(board_path),
-        )
-        write_run_metadata(run_dir, {**load_json(run_dir / "run_meta.json"), "override_from_frame": frame_idx})
-        st.success("Re-decoded moves and regenerated PGN/analysis/index.html.")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Re-decode failed: {exc}")
+    if st.button("Save board_ids_override.json and re-decode", type="primary"):
+        override_path, payload = _save_override(board_states, frame_idx, edited_grid)
+        st.success(f"Saved overrides to {override_path}")
+        try:
+            wrapped_states = _wrap_states(payload)
+            # Decode from the original starting position so earlier moves remain intact.
+            moves, confidence = decode_moves_from_tags(wrapped_states, output_dir=str(run_dir / "debug"))
+            if not moves or "??" in moves:
+                raise ValueError("The corrected observations still contain unresolved moves. Check the board IDs.")
+            warning = regenerate_review(run_dir, generate_pgn(moves), confidence, override_path)
+            if warning:
+                st.warning(warning)
+            write_run_metadata(run_dir, {**load_json(run_dir / "run_meta.json"), "override_from_frame": frame_idx})
+            st.success("Re-decoded moves and regenerated PGN/analysis/index.html.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Re-decode failed: {exc}")
 
 st.divider()
 st.subheader("Move-level correction")
@@ -112,12 +103,15 @@ if not pgn_path.exists():
     st.stop()
 
 pgn_content = pgn_path.read_text(encoding="utf-8")
-game = chess.pgn.read_game(iter(pgn_content.splitlines()))
-if not game:
+game = chess.pgn.read_game(io.StringIO(pgn_content))
+if game is None or game.errors:
     st.error("Could not parse PGN.")
     st.stop()
 
 moves_list = list(game.mainline_moves())
+if not moves_list:
+    st.info("This PGN contains no moves to correct.")
+    st.stop()
 board = game.board()
 for idx, move in enumerate(moves_list):
     board.push(move)
@@ -131,31 +125,13 @@ legal_san = [board_reset.san(mv) for mv in board_reset.legal_moves]
 new_san = st.selectbox("Choose replacement SAN", legal_san)
 
 if st.button("Apply move override"):
-    replacement_move = None
-    for mv in board_reset.legal_moves:
-        if board_reset.san(mv) == new_san:
-            replacement_move = mv
-            break
-    if replacement_move is None:
-        st.error("Selected move not legal.")
-    else:
-        new_game_board = game.board()
-        new_moves: List[str] = []
-        for i in range(move_number - 1):
-            move_obj = moves_list[i]
-            new_game_board.push(move_obj)
-            new_moves.append(new_game_board.san(move_obj))
-        new_game_board.push(replacement_move)
-        new_moves.append(new_game_board.san(replacement_move))
-        for mv in moves_list[move_number:]:
-            if mv in new_game_board.legal_moves:
-                new_game_board.push(mv)
-                new_moves.append(new_game_board.san(mv))
-            else:
-                break
-        pgn = generate_pgn(new_moves)
-        (run_dir / "game.pgn").write_text(pgn, encoding="utf-8")
-        (run_dir / "moves.json").write_text(json.dumps(new_moves, indent=2), encoding="utf-8")
-        analysis = analyze_game(str(run_dir / "game.pgn"))
-        (run_dir / "analysis.json").write_text(json.dumps(analysis, indent=2), encoding="utf-8")
-        st.success("Move replaced and outputs regenerated.")
+    try:
+        pgn, discarded = replace_move(pgn_content, int(move_number), new_san)
+        warning = regenerate_review(run_dir, pgn)
+        if warning:
+            st.warning(warning)
+        if discarded:
+            st.warning(f"Discarded {discarded} following plies that became illegal. Correct or re-decode the remaining game.")
+        st.success("Move replaced and PGN, move trace, analysis, and replay regenerated.")
+    except Exception as exc:
+        st.error(f"Move correction failed: {exc}")

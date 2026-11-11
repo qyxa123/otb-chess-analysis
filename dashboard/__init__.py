@@ -6,15 +6,15 @@ from typing import Dict
 
 from flask import Flask, jsonify, render_template
 
-from game_review import GameReviewFormatter
-from self_analysis import analyze_pgn_file
-from explore import extract_opening_from_pgn
-
 BASE_DIR = Path(__file__).parent
 SAMPLE_PGN = BASE_DIR / "sample_data" / "sample_game.pgn"
 
 
 def build_payload() -> Dict[str, object]:
+    from game_review import GameReviewFormatter
+    from self_analysis import analyze_pgn_file
+    from explore import extract_opening_from_pgn
+
     pgn_text = SAMPLE_PGN.read_text(encoding="utf-8")
     analysis = analyze_pgn_file(str(SAMPLE_PGN))
     review = GameReviewFormatter().build_review(pgn_text, analysis)

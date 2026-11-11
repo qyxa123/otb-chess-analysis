@@ -4,13 +4,14 @@ Stockfish分析模块
 功能：使用Stockfish引擎分析PGN文件，生成分析结果
 """
 
-import subprocess
 import chess.engine
 import chess.pgn
+from otbreview.pipeline.analyze import find_stockfish, _extract_eval
+from self_analysis import parse_pgn_text
 
 class StockfishAnalyzer:
-    def __init__(self):
-        self.stockfish_path = "./stockfish"
+    def __init__(self, stockfish_path=None):
+        self.stockfish_path = stockfish_path or find_stockfish()
         self.depth = 20
     
     def analyze_pgn(self, pgn_content):
@@ -19,10 +20,9 @@ class StockfishAnalyzer:
         
         try:
             # 解析PGN
-            game = chess.pgn.read_game(iter(pgn_content.splitlines()))
-            if not game:
-                print("无法解析PGN内容")
-                return None
+            game = parse_pgn_text(pgn_content)
+            if self.stockfish_path is None:
+                raise RuntimeError("找不到Stockfish，请安装或设置 STOCKFISH_PATH。")
             
             # 设置Stockfish引擎
             with chess.engine.SimpleEngine.popen_uci(self.stockfish_path) as engine:
@@ -35,11 +35,7 @@ class StockfishAnalyzer:
                     info = engine.analyse(board, chess.engine.Limit(depth=self.depth))
                     
                     # 获取评估值
-                    score = info["score"]
-                    if score.is_mate():
-                        evaluation = f"#{'+' if score.white().mate() > 0 else '-'}{abs(score.white().mate())}"
-                    else:
-                        evaluation = f"{score.white().cp/100:.2f}"
+                    evaluation = self._format_evaluation(info["score"], board.turn)
                     
                     analysis_results.append({
                         "move": board.san(move),
@@ -53,11 +49,7 @@ class StockfishAnalyzer:
                 
                 # 分析最终局面
                 info = engine.analyse(board, chess.engine.Limit(depth=self.depth))
-                score = info["score"]
-                if score.is_mate():
-                    evaluation = f"#{'+' if score.white().mate() > 0 else '-'}{abs(score.white().mate())}"
-                else:
-                    evaluation = f"{score.white().cp/100:.2f}"
+                evaluation = self._format_evaluation(info["score"], board.turn)
                 
                 analysis_results.append({
                     "move": "终局",
@@ -72,6 +64,13 @@ class StockfishAnalyzer:
         except Exception as e:
             print(f"分析失败: {str(e)}")
             return None
+
+    @staticmethod
+    def _format_evaluation(score, turn):
+        data = _extract_eval(score, turn)
+        if data['mate'] is not None:
+            return f"#{'+' if data['cp'] > 0 else '-'}{abs(data['mate'])}"
+        return f"{data['cp'] / 100:.2f}"
     
     def generate_analysis_report(self, analysis_results):
         """生成分析报告"""

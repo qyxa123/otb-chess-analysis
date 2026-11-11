@@ -13,7 +13,9 @@ from typing import Dict, List, Tuple
 import altair as alt
 import pandas as pd
 import chess
+import chess.pgn
 import chess.svg
+import zipfile
 
 # Ensure project root is in path
 PROJECT_ROOT = Path(__file__).parent.absolute()
@@ -73,32 +75,13 @@ def _board_at_ply(pgn_text: str, ply: int) -> Tuple[chess.Board, List[chess.Move
     game = chess.pgn.read_game(io.StringIO(pgn_text))
     if game is None:
         raise ValueError("Invalid PGN provided")
+    if game.errors:
+        raise ValueError(f"Invalid PGN: {game.errors[0]}")
     board = game.board()
     moves = list(game.mainline_moves())
     for mv in moves[:ply]:
         board.push(mv)
     return board, moves
-
-
-def _accuracy_for_color(analysis: List[Dict[str, object]], color_is_white: bool) -> float:
-    penalties = []
-    for idx, item in enumerate(analysis):
-        mover_is_white = idx % 2 == 0
-        if mover_is_white != color_is_white:
-            continue
-        penalties.append(abs(float(item.get("best_diff", 0.0))))
-    if not penalties:
-        return 0.0
-    mean_penalty = sum(penalties) / len(penalties)
-    return max(0.0, min(100.0, 100.0 - mean_penalty / 2.0))
-
-
-def _phase_for_ply(ply: int, total: int) -> str:
-    if ply <= max(12, total // 4):
-        return "Opening"
-    if ply <= max(30, total // 2):
-        return "Middlegame"
-    return "Endgame"
 
 
 def _build_review_payload(run_dir: Path) -> Dict[str, object]:
@@ -112,10 +95,6 @@ def _build_review_payload(run_dir: Path) -> Dict[str, object]:
 
     reviewer = GameReviewFormatter()
     game_review = reviewer.build_review(pgn_text, analysis)
-
-    accuracy_white = _accuracy_for_color(analysis, True)
-    accuracy_black = _accuracy_for_color(analysis, False)
-    performance_rating = int(800 + (accuracy_white + accuracy_black) * 4)
 
     # Evaluation graph
     evaluation_scores = [
@@ -173,18 +152,8 @@ def _build_review_payload(run_dir: Path) -> Dict[str, object]:
     (run_dir / "follow_up_moves.json").write_text(json.dumps(follow_ups, indent=2), encoding="utf-8")
 
     classification_counts: Dict[str, int] = {}
-    phase_scores: Dict[str, List[float]] = {"Opening": [], "Middlegame": [], "Endgame": []}
-    for idx, review in enumerate(game_review.reviews):
+    for review in game_review.reviews:
         classification_counts[review.label] = classification_counts.get(review.label, 0) + 1
-        phase = _phase_for_ply(idx + 1, len(game_review.reviews))
-        mover_is_white = idx % 2 == 0
-        accuracy = accuracy_white if mover_is_white else accuracy_black
-        phase_scores[phase].append(accuracy)
-
-    phase_grades = {
-        name: round(sum(values) / len(values), 1) if values else 0.0
-        for name, values in phase_scores.items()
-    }
 
     annotated_path = run_dir / "annotated_game.pgn"
     annotated_path.write_text(game_review.annotated_pgn, encoding="utf-8")
@@ -193,10 +162,7 @@ def _build_review_payload(run_dir: Path) -> Dict[str, object]:
         "pgn_text": pgn_text,
         "game_review": game_review,
         "evaluation_scores": evaluation_scores,
-        "accuracy": {"white": accuracy_white, "black": accuracy_black},
         "classification_counts": classification_counts,
-        "performance_rating": performance_rating,
-        "phase_grades": phase_grades,
         "key_moves": key_moves,
         "follow_ups": follow_ups,
     }
@@ -204,12 +170,12 @@ def _build_review_payload(run_dir: Path) -> Dict[str, object]:
 
 def run_analysis(video_file, params):
     # Create Run ID
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     
     # Save Video
-    video_path = run_dir / video_file.name
+    video_path = run_dir / ("input_video" + Path(video_file.name).suffix.lower())
     with open(video_path, "wb") as f:
         f.write(video_file.getbuffer())
     
@@ -246,6 +212,7 @@ def run_analysis(video_file, params):
                 motion_threshold=params['motion_threshold'],
                 stable_duration=params['stable_duration']
             )
+        (run_dir / "logs.txt").write_text(log_capture_string.getvalue(), encoding="utf-8")
         status_container.update(label="Analysis Complete!", state="complete", expanded=False)
         st.session_state.run_id = run_id
         st.session_state.page = "results"
@@ -258,7 +225,7 @@ def run_analysis(video_file, params):
         # Save logs even on failure
         with open(run_dir / "logs.txt", "w") as f:
             f.write(log_capture_string.getvalue())
-        raise e
+        return
 
     # Save logs
     with open(run_dir / "logs.txt", "w") as f:
@@ -290,16 +257,13 @@ def _render_game_review_tab(run_dir: Path):
         return
 
     game_review = payload["game_review"]
-    accuracy = payload["accuracy"]
 
-    st.markdown("### Chess.com-style Game Review")
-    col_metrics = st.columns(4)
-    col_metrics[0].metric("White Accuracy", f"{accuracy['white']:.1f}")
-    col_metrics[1].metric("Black Accuracy", f"{accuracy['black']:.1f}")
-    col_metrics[2].metric("Performance Rating", payload["performance_rating"])
-    col_metrics[3].metric("Total Moves", len(game_review.reviews))
+    st.markdown("### Game Review")
+    st.info("This tab uses a simple material heuristic. Scores and suggestions are approximate. "
+            "For the pipeline's Stockfish analysis, open Debug → Replay.")
+    st.metric("Half-moves", len(game_review.reviews))
 
-    chart_df = pd.DataFrame(payload["evaluation_scores"])
+    chart_df = pd.DataFrame(payload["evaluation_scores"], columns=["ply", "evaluation"])
     chart_df["move"] = chart_df["ply"]
     chart = (
         alt.Chart(chart_df)
@@ -309,36 +273,13 @@ def _render_game_review_tab(run_dir: Path):
     )
     st.altair_chart(chart, use_container_width=True)
 
-    col_stats = st.columns(2)
-    with col_stats[0]:
-        st.markdown("#### Move Classification")
-        stats_df = pd.DataFrame(
-            [
-                {"Label": label, "Count": count}
-                for label, count in payload["classification_counts"].items()
-            ]
-        )
-        if not stats_df.empty:
-            st.bar_chart(stats_df.set_index("Label"))
-        else:
-            st.info("No classified moves available.")
-        st.markdown("#### Phase Grades")
-        st.table(
-            pd.DataFrame(
-                [{"Phase": k, "Accuracy": v} for k, v in payload["phase_grades"].items()]
-            )
-        )
-
-    with col_stats[1]:
-        st.markdown("#### Accuracy by Side")
-        st.progress(min(1.0, accuracy["white"] / 100), text=f"White: {accuracy['white']:.1f}")
-        st.progress(min(1.0, accuracy["black"] / 100), text=f"Black: {accuracy['black']:.1f}")
-
     st.divider()
     st.markdown("### Key Moves & Coach")
     key_moves = payload["key_moves"]
     if not key_moves:
         st.info("No key moves identified for this game.")
+        st.download_button("Download PGN", payload["pgn_text"], file_name=f"{run_dir.name}.pgn",
+                           key="review_pgn_no_key_moves")
         return
 
     state_key = f"key_move_index_{run_dir.name}"
@@ -408,7 +349,7 @@ def _render_game_review_tab(run_dir: Path):
     st.text_area("Game PGN", payload["pgn_text"], height=180)
     dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
     with dl_col1:
-        st.download_button("Download PGN", payload["pgn_text"], file_name=f"{run_dir.name}.pgn")
+        st.download_button("Download PGN", payload["pgn_text"], file_name=f"{run_dir.name}.pgn", key="review_pgn")
     with dl_col2:
         st.download_button(
             "Analysis JSON",
@@ -437,6 +378,14 @@ def show_results(run_id):
         st.error("Run directory not found.")
         return
 
+    analysis_path = run_dir / "analysis.json"
+    if analysis_path.exists():
+        metadata = json.loads(analysis_path.read_text(encoding="utf-8")).get("metadata", {})
+        if metadata.get("partial"):
+            st.warning("Recognition stopped at an uncertain observation. PGN contains only the reliable prefix.")
+        for warning in metadata.get("warnings", []):
+            st.warning(warning)
+
     page_tabs = st.tabs(["Overview", "Game Review", "Debug"])
 
     with page_tabs[0]:
@@ -455,11 +404,12 @@ def show_results(run_id):
         with col2:
             st.subheader("📊 Files")
             # Zip download
-            shutil.make_archive(str(run_dir / "export"), 'zip', run_dir)
-            zip_path = run_dir / "export.zip"
-            if zip_path.exists():
-                with open(zip_path, "rb") as fp:
-                    st.download_button("Download Full Report (ZIP)", fp, file_name=f"{run_id}_export.zip")
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+                for artifact in sorted(run_dir.rglob("*")):
+                    if artifact.is_file() and artifact.suffix.lower() not in {".zip", ".mp4", ".mov", ".avi", ".mkv"}:
+                        zf.write(artifact, artifact.relative_to(run_dir))
+            st.download_button("Download Full Report (ZIP)", archive.getvalue(), file_name=f"{run_id}_export.zip")
 
     with page_tabs[1]:
         _render_game_review_tab(run_dir)
@@ -522,7 +472,8 @@ if st.session_state.page == "home":
     Turn your over-the-board chess videos into PGNs automatically!
     
     **Instructions:**
-    1. Upload a video (hold phone steady, ensure full board is visible).
+    1. Record from the starting position, with a8 at the top left. Keep the full board visible.
+       The default mode requires ArUco 5x5 piece tags 1–32 and corner markers 0–3.
     2. Click Run.
     3. Review the PGN and analysis.
     """)
@@ -534,8 +485,11 @@ if st.session_state.page == "home":
     with col1:
         st.subheader("Settings")
         use_markers = st.checkbox("Use ArUco/AprilTag Markers", value=True, help="Requires markers on board corners")
-        motion_threshold = st.number_input("Motion Threshold", value=0.01, format="%.3f", help="Lower = more sensitive to motion")
-        stable_duration = st.number_input("Stable Duration (s)", value=0.5, format="%.1f", help="How long board must be still")
+        use_piece_tags = st.checkbox("Use piece tags (recommended)", value=True)
+        if not use_piece_tags:
+            st.warning("Occupancy recognition is experimental and needs a fixed camera and clear light/dark pieces.")
+        motion_threshold = st.number_input("Motion Threshold", min_value=0.001, max_value=1.0, value=0.01, format="%.3f", help="Lower = more sensitive to motion")
+        stable_duration = st.number_input("Stable Duration (s)", min_value=0.1, value=0.5, format="%.1f", help="How long board must be still")
         
     with col2:
         st.subheader("Upload Video")
@@ -545,6 +499,7 @@ if st.session_state.page == "home":
             if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
                 params = {
                     "use_markers": use_markers,
+                    "use_piece_tags": use_piece_tags,
                     "motion_threshold": motion_threshold,
                     "stable_duration": stable_duration
                 }

@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-set -e
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if [ ! -d "venv" ]; then
-  echo "Creating virtualenv..."
-  python3 -m venv venv
+VENV_DIR="${OTBREVIEW_VENV:-.venv}"
+PYTHON_BIN="${PYTHON:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "Python 3.10+ is required. Install Python and rerun this script."
+  exit 1
 fi
-# shellcheck disable=SC1091
-source venv/bin/activate
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+"$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
-pip install -r requirements.txt
-pip install -r requirements_dashboard.txt
-
-# Launch Streamlit and open browser
 echo "Starting OTBReview Studio on http://localhost:8501"
-python -m webbrowser http://localhost:8501 >/dev/null 2>&1 &
-exec streamlit run dashboard/app.py
+exec "$VENV_DIR/bin/python" -m streamlit run dashboard/app.py "$@"

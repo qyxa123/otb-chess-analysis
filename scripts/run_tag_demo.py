@@ -292,7 +292,7 @@ def main() -> None:
             warped,
             idx,
             str(overlays_dir),
-            min_area_ratio=0.0005 * args.tag_sensitivity,
+            min_area_ratio=0.00005 * args.tag_sensitivity,
             enable_clahe=not args.disable_clahe,
             enable_threshold=not args.disable_threshold_path,
         )
