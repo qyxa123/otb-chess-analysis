@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from dashboard.utils import analysis_command
 
 import pandas as pd
 import streamlit as st
@@ -44,50 +51,26 @@ def run_marker_pipeline(
     fps: float,
     stability: float,
 ) -> bool:
-    st.write("### Running Marker Mode…")
-    cmd = [
-        "python",
-        "scripts/run_debug_pipeline.py",
-        "--input",
-        str(input_path),
-        "--outdir",
-        str(run_dir),
-        "--use_markers",
-        "1",
-        "--fps",
-        str(fps),
-    ]
-    code, logs = _stream_logs(cmd)
-    st.write("### Generating CHECK.html…")
-    report_cmd = ["python", "scripts/make_check_report.py", "--outdir", str(run_dir)]
-    code2, logs2 = _stream_logs(report_cmd)
-    return code == 0 and code2 == 0 and "fail" not in (logs + logs2).lower()
+    return _run_full_pipeline(input_path, run_dir, False, fps, stability)
 
 
-def run_tag_pipeline(
-    input_path: Path,
-    run_dir: Path,
-    fps: float,
-    stability: float,
-    sensitivity: float,
-) -> bool:
-    st.write("### Running Tag Mode…")
-    cmd = [
-        "python",
-        "scripts/run_tag_demo.py",
-        "--input",
-        str(input_path),
-        "--outdir",
-        str(run_dir),
-        "--fps",
-        str(fps),
-        "--motion-threshold",
-        str(stability),
-    ]
-    if sensitivity != 1.0:
-        cmd.extend(["--tag-sensitivity", str(sensitivity)])
-    code, logs = _stream_logs(cmd)
-    return code == 0 and "fail" not in logs.lower()
+def run_tag_pipeline(input_path: Path, run_dir: Path, fps: float, stability: float,
+                     sensitivity: float) -> bool:
+    return _run_full_pipeline(input_path, run_dir, True, fps, stability, sensitivity)
+
+
+def _run_full_pipeline(input_path, run_dir, use_piece_tags, fps, stability, sensitivity=1.0):
+    command = analysis_command(input_path, run_dir, use_piece_tags=use_piece_tags,
+                               fps=fps, motion_threshold=stability, tag_sensitivity=sensitivity)
+    try:
+        code, logs = _stream_logs(command)
+    except Exception as exc:
+        code, logs = -1, str(exc)
+    (run_dir / "logs.txt").write_text(logs, encoding="utf-8")
+    success = code == 0 and (run_dir / "game.pgn").exists() and (run_dir / "index.html").exists()
+    write_run_metadata(run_dir, {**load_run_metadata(run_dir),
+                                "status": "complete" if success else "failed", "exit_code": code})
+    return success
 
 
 def sidebar_history():
@@ -132,7 +115,7 @@ def _render_reports(run_dir: Path):
             st.components.v1.html(path.read_text(encoding="utf-8", errors="ignore"), height=600, scrolling=True)
         except Exception:
             st.warning("Preview not available; open in browser below")
-        st.markdown(f"[Open in browser]({path.resolve().as_uri()})")
+        st.download_button(f"Download {path.name}", path.read_bytes(), file_name=path.name)
 
 
 def _render_downloads(run_dir: Path):
@@ -186,48 +169,18 @@ def _render_review_panel(run_dir: Path):
         st.warning("Unable to parse PGN")
         return
 
-    col1, col2 = st.columns(2)
-    col1.metric("Accuracy (White)", f"{review['accuracy']['white']}%")
-    col2.metric("Accuracy (Black)", f"{review['accuracy']['black']}%")
-
-    st.markdown("#### Advantage Graph")
+    st.caption("Material balance in pawns, from White's perspective. This is not a Stockfish evaluation or an accuracy estimate.")
     st.line_chart(review["evals"], height=200)
-
-    counts = review.get("label_counts", {})
-    summary_df = pd.DataFrame([
-        {"Label": k, "Count": v} for k, v in counts.items()
-    ])
-    st.bar_chart(summary_df.set_index("Label"))
-
-    st.markdown("#### Key Moves + Coach")
-    from game_review import GameReviewFormatter
-
-    formatter = GameReviewFormatter()
-    swing_list = []
-    evals = review["evals"]
-    for idx, move in enumerate(review["moves"]):
-        eval_before = evals[idx - 1] if idx > 0 else 0
-        eval_after = evals[idx]
-        swing = eval_after - eval_before
-        label = formatter.label_move(swing if idx % 2 == 0 else -swing)
-        swing_list.append((abs(swing), idx, move, label))
-    swing_list.sort(reverse=True)
-
-    for swing, idx, move, label in swing_list[:5]:
-        coach = formatter.coach_text(label, move, None, swing if idx % 2 == 0 else -swing)
-        with st.expander(f"Move {idx + 1}: {move} • {label}"):
-            st.write(coach.headline)
-            st.write(coach.detail)
-            st.write("Suggestions:")
-            for s in coach.suggestions:
-                st.write(f"- {s}")
-            st.caption("Retry: imagine an alternative move and compare swing in your head — higher swing means risk.")
+    st.write(" ".join(review["moves"]))
+    index_path = run_dir / "index.html"
+    if index_path.exists():
+        st.components.v1.html(index_path.read_text(encoding="utf-8"), height=700, scrolling=True)
 
 
 def upload_and_run(selected_run: Optional[Path]):
     st.header("Upload & Run")
     uploaded_file = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "MP4", "MOV", "MKV"])
-    mode = st.radio("Mode", ["Marker Mode", "Tag Mode"], help="Marker = corner ArUco only; Tag = chess piece tags")
+    mode = st.radio("Mode", ["Tag Mode", "Marker Mode (experimental)"], help="Marker = corner ArUco only; Tag = chess piece tags")
     fps = st.slider("FPS sampling", 1.0, 12.0, 3.0, 0.5)
     stability = st.slider("Stability threshold (motion)", 0.001, 0.05, 0.01, 0.001)
     sensitivity = st.slider("Tag detection sensitivity", 0.5, 1.5, 1.0, 0.1)
@@ -261,7 +214,7 @@ def upload_and_run(selected_run: Optional[Path]):
         if success:
             st.success("Pipeline completed!")
         else:
-            st.warning("Pipeline finished with warnings. Check logs and reports.")
+            st.error("Analysis failed. Check the logs above.")
 
 
 def main():
@@ -289,7 +242,7 @@ def main():
             cols[2].write(status)
             if cols[3].button("Open", key=f"open-{run_id}"):
                 st.session_state["selected_run"] = path
-                st.experimental_rerun()
+                st.rerun()
 
 
 if __name__ == "__main__":

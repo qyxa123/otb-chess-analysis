@@ -24,11 +24,11 @@ def detect_and_warp_board(
         output_dir: 输出目录（保存矫正后的棋盘）
     
     Returns:
-        (warped_board, grid_overlay_image) 或 (None, None) 如果失败
+        (warped_board, grid_overlay_image, corner_count)，失败返回(None, None, 0)
     """
     frame = cv2.imread(frame_path)
     if frame is None:
-        return None, None
+        return None, None, 0
     
     corner_count = 0
     if use_markers:
@@ -55,9 +55,8 @@ def _detect_with_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optio
     id_to_corner = detect_aruco_corners(frame)
     
     if id_to_corner is None:
-        print("  警告: 未检测到足够的ArUco标记，fallback到纯视觉检测")
-        warped, grid = _detect_without_markers(frame)
-        return warped, grid, 0
+        print("  未检测到完整的ArUco角标0/1/2/3，请检查画面裁切与光照")
+        return None, None, 0
     
     # 使用ArUco标记进行透视变换
     warped = warp_board(frame, id_to_corner)
@@ -189,16 +188,8 @@ def _detect_without_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Op
             max_area = area
     
     if board_contour is None:
-        # 如果找不到四边形，使用整个图像
-        h, w = frame.shape[:2]
-        board_contour = np.array([
-            [0, 0],
-            [w, 0],
-            [w, h],
-            [0, h]
-        ], dtype=np.float32)
-    else:
-        board_contour = board_contour.reshape(4, 2).astype(np.float32)
+        return None, None
+    board_contour = board_contour.reshape(4, 2).astype(np.float32)
     
     # 确定四个角点的顺序（左上、右上、右下、左下）
     board_contour = _order_points(board_contour)
@@ -215,6 +206,8 @@ def _detect_without_markers(frame: np.ndarray) -> Tuple[Optional[np.ndarray], Op
     
     # 使用较大的尺寸作为正方形边长
     size = max(max_width, max_height)
+    if size < 8:
+        return None, None
     
     # 目标点（正方形）
     dst = np.array([

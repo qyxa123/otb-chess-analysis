@@ -38,12 +38,13 @@ def detect_piece_tags(
     frame_idx: int,
     output_dir: Path,
     allowed_ids: Optional[List[int]] = None,
-    min_area_ratio: float = 0.0005,
+    min_area_ratio: float = 0.00005,
     tag_size_mm: float = 3.0,
     expected_square_mm: float = 50.0,
     denoise: bool = True,
     enable_clahe: bool = True,
     enable_threshold: bool = True,
+    tag_family: str = 'aruco5x5_100',
 ) -> TagDetectResult:
     """检测矫正棋盘上的棋子标签，并输出8x8矩阵。
 
@@ -103,7 +104,16 @@ def detect_piece_tags(
             ("otsu", otsu, 1.0),
         ])
 
-    aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
+    families = {
+        'aruco5x5_100': aruco.DICT_5X5_100,
+        'aruco4x4': aruco.DICT_4X4_50,
+        'aruco4x4_50': aruco.DICT_4X4_50,
+        'aruco6x6_250': aruco.DICT_6X6_250,
+        'apriltag36h11': aruco.DICT_APRILTAG_36h11,
+    }
+    if tag_family not in families:
+        raise ValueError(f'Unsupported tag family: {tag_family}')
+    aruco_dict = aruco.getPredefinedDictionary(families[tag_family])
     params = aruco.DetectorParameters()
     params.minMarkerPerimeterRate = 0.014
     params.cornerRefinementMethod = aruco.CORNER_REFINE_SUBPIX
@@ -301,7 +311,7 @@ def _draw_overlay(image: np.ndarray, detections: List[TagDetection], cell_size: 
         return overlay
 
     if detections:
-        corners = [np.array(det.corners, dtype=np.float32) for det in detections]
+        corners = [np.array(det.corners, dtype=np.float32).reshape(1, 4, 2) for det in detections]
         ids = np.array([det.marker_id for det in detections], dtype=np.int32).reshape(-1, 1)
         aruco.drawDetectedMarkers(overlay, corners, ids)
 

@@ -18,8 +18,8 @@ def detect_pieces_tags(
     warped_board: np.ndarray,
     frame_idx: int,
     output_dir: str,
-    tag_family: str = 'apriltag36h11',
-    min_area_ratio: float = 0.0005,
+    tag_family: str = 'aruco5x5_100',
+    min_area_ratio: float = 0.00005,
     enable_clahe: bool = True,
     enable_threshold: bool = True,
 ) -> Dict[str, any]:
@@ -49,6 +49,7 @@ def detect_pieces_tags(
         min_area_ratio=min_area_ratio,
         enable_clahe=enable_clahe,
         enable_threshold=enable_threshold,
+        tag_family=tag_family,
     )
 
     piece_centers_map = [[None for _ in range(8)] for _ in range(8)]
@@ -177,11 +178,11 @@ def detect_pieces_two_stage(
     
     # 保存第一帧warped图
     if frame_idx == 0 and debug:
-        cv2.imwrite(str(output_path / "board_first_warp.png"), warped)
+        cv2.imwrite(str(output_path / "board_first_warp.png"), warped_board)
     
     # Phase A: piece vs empty
     piece_mask, diff_heatmap, edge_heatmap, metrics = _phase_a_piece_empty(
-        warped_board=warped,
+        warped_board=warped_board,
         frame_idx=frame_idx,
         output_path=output_path,
         patch_ratio=patch_ratio,
@@ -193,7 +194,7 @@ def detect_pieces_two_stage(
     
     # Phase B: light vs dark（只在piece格）
     occupancy, labels, confidence = _phase_b_light_dark(
-        warped_board=warped,
+        warped_board=warped_board,
         piece_mask=piece_mask,
         frame_idx=frame_idx,
         output_path=output_path,

@@ -6,12 +6,14 @@
 from pathlib import Path
 from typing import Optional
 import json
+import csv
+import cv2
 
-from .extract import extract_stable_frames
+from .extract import extract_stable_frames, extract_stable_frames_debug
 from .board_detect import detect_and_warp_board
 from .pieces import detect_pieces, detect_pieces_tags
 from .decode import decode_moves, decode_moves_from_tags
-from .pgn import generate_pgn
+from .pgn import generate_pgn, generate_moves_json
 from .analyze import analyze_game
 from .classify import classify_moves
 from .keymoves import find_key_moves
@@ -26,7 +28,11 @@ def analyze_video(
     pv_length: int = 6,
     motion_threshold: float = 0.01,
     stable_duration: float = 0.5,
-    use_piece_tags: bool = True  # 新增参数
+    use_piece_tags: bool = True,
+    target_fps: Optional[float] = None,
+    tag_sensitivity: float = 1.0,
+    enable_clahe: bool = True,
+    enable_threshold: bool = True,
 ) -> None:
     """
     分析视频文件，生成PGN和分析结果
@@ -41,6 +47,16 @@ def analyze_video(
         stable_duration: 判定稳定的持续时间(秒)
         use_piece_tags: 是否使用棋子标签识别 (默认True)
     """
+    if depth < 1 or pv_length < 1:
+        raise ValueError("分析深度和PV长度必须大于0")
+    if not 0 < motion_threshold <= 1 or stable_duration <= 0:
+        raise ValueError("运动阈值必须在(0, 1]内，稳定时长必须大于0")
+    if target_fps is not None and target_fps <= 0:
+        raise ValueError("采样FPS必须大于0")
+    if tag_sensitivity <= 0:
+        raise ValueError("标签面积倍率必须大于0")
+    if not Path(video_path).is_file():
+        raise FileNotFoundError(f"视频文件不存在: {video_path}")
     outdir_path = Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
     debug_dir = outdir_path / "debug"
@@ -49,12 +65,19 @@ def analyze_video(
     tag_overlays_dir.mkdir(exist_ok=True)
     
     print("\n=== 步骤1: 抽取稳定帧 ===")
-    stable_frames = extract_stable_frames(
+    extract_kwargs = dict(
         video_path=video_path,
         output_dir=str(debug_dir / "stable_frames"),
         motion_threshold=motion_threshold,
         stable_duration=stable_duration
     )
+    if target_fps is None:
+        stable_frames = extract_stable_frames(**extract_kwargs)
+    else:
+        stable_frames = extract_stable_frames_debug(
+            **extract_kwargs, target_fps=target_fps,
+            motion_csv_path=str(debug_dir / "motion.csv"),
+        )
     print(f"抽取到 {len(stable_frames)} 个稳定局面")
     
     if len(stable_frames) < 2:
@@ -98,7 +121,10 @@ def analyze_video(
             state = detect_pieces_tags(
                 warped_board=warped,
                 frame_idx=i,
-                output_dir=str(tag_overlays_dir)
+                output_dir=str(tag_overlays_dir),
+                min_area_ratio=0.00005 * tag_sensitivity,
+                enable_clahe=enable_clahe,
+                enable_threshold=enable_threshold,
             )
         else:
             state = detect_pieces(
@@ -114,6 +140,7 @@ def analyze_video(
         id_grids = [s.get('piece_ids', []) for s in board_states]
         with open(board_ids_path, 'w', encoding='utf-8') as f:
             json.dump(id_grids, f, indent=2)
+        (outdir_path / "board_ids.json").write_text(json.dumps(id_grids, indent=2), encoding="utf-8")
         # 保存标签识别质量指标
         tag_metrics_rows = []
         expected_pieces = 32
@@ -136,12 +163,12 @@ def analyze_video(
             })
 
         metrics_path = debug_dir / "tag_metrics.csv"
-        with open(metrics_path, 'w', encoding='utf-8') as f:
-            f.write("frame,corner_markers,tag_ids,occupied_squares,coverage,warnings\n")
-            for row in tag_metrics_rows:
-                f.write(
-                    f"{row['frame']},{row['corner_markers']},{row['tag_ids']},{row['occupied_squares']},{row['coverage']},\"{row['warnings']}\"\n"
-                )
+        with open(metrics_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "frame", "corner_markers", "tag_ids", "occupied_squares", "coverage", "warnings"
+            ])
+            writer.writeheader()
+            writer.writerows(tag_metrics_rows)
     else:
         # 如果不使用标签，则不生成该文件，并在后面调用时传 None
         board_ids_path = None
@@ -170,7 +197,9 @@ def analyze_video(
     print(f"解码出 {len(moves)} 步走法")
     uncertain_moves = [i for i, m in enumerate(moves) if m == "??"]
     if uncertain_moves:
-        print(f"警告: {len(uncertain_moves)} 步无法唯一确定，建议在网页中检查")
+        print("警告: 识别遇到不确定走法，棋谱仅保留此前的合法走法，请检查调试图。")
+    if not moves or moves[0] == "??":
+        raise ValueError("没有识别到可靠走法，请检查棋盘方向、标签和稳定帧；调试图已保存。")
     
     print("\n=== 步骤5: 生成PGN ===")
     pgn_content = generate_pgn(moves=moves)
@@ -178,6 +207,9 @@ def analyze_video(
     with open(pgn_path, 'w', encoding='utf-8') as f:
         f.write(pgn_content)
     print(f"PGN已保存: {pgn_path}")
+    (outdir_path / "moves.json").write_text(
+        json.dumps(generate_moves_json(moves), indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     
     print("\n=== 步骤6: Stockfish分析 ===")
     analysis = analyze_game(
@@ -199,7 +231,10 @@ def analyze_video(
         'metadata': {
             'depth': depth,
             'pv_length': pv_length,
-            'uncertain_moves': uncertain_moves
+            'uncertain_moves': uncertain_moves,
+            'partial': bool(uncertain_moves),
+            'analysis_source': analysis[0].get('analysis_source', 'stockfish') if analysis else 'unavailable',
+            'warnings': list(dict.fromkeys(item['warning'] for item in analysis if item.get('warning'))),
         }
     }
     

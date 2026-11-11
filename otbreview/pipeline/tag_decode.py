@@ -40,6 +40,10 @@ def _init_board_from_map(piece_map: Dict[int, Dict[str, str]]) -> Tuple[chess.Bo
         id_to_square[pid] = square
 
     board.turn = chess.WHITE
+    # Board.empty() has no castling rights. The configured initial arrangement
+    # must retain the rights of unmoved home kings and rooks.
+    board.castling_rights = chess.BB_CORNERS
+    board.castling_rights = board.clean_castling_rights()
     return board, id_to_piece, id_to_square
 
 
@@ -106,73 +110,31 @@ def infer_moves_from_id_grids(
     piece_map: Dict[int, Dict[str, str]],
     output_dir: Optional[Path] = None,
 ) -> Tuple[List[str], List[Dict]]:
-    """根据相邻棋子ID矩阵推断走法"""
+    """Decode configured piece IDs using the same legal matcher as video mode.
+
+    Captures change two IDs and castling changes four squares. Matching the
+    complete legal move avoids treating these normal moves as detection errors.
+    """
+    from .decode import decode_moves_from_tags
+
     if not board_grids:
         return [], []
-
-    board, id_to_piece, id_to_square = _init_board_from_map(piece_map)
-    prev_positions = _grid_to_positions(board_grids[0]["board_ids"])
-    id_to_square.update(prev_positions)
-
-    moves_san: List[str] = []
-    move_debug: List[Dict] = []
-    uncertain: List[Dict] = []
-
-    for idx in range(1, len(board_grids)):
-        curr_positions = _grid_to_positions(board_grids[idx]["board_ids"])
-        moved_ids = [pid for pid in set(prev_positions.keys()) | set(curr_positions.keys()) if prev_positions.get(pid) != curr_positions.get(pid)]
-
-        record: Dict = {
-            "step": idx,
-            "moved_ids": moved_ids,
-            "from_to": {},
-            "uncertain": False,
-        }
-
-        chosen_move: Optional[chess.Move] = None
-
-        castle = _detect_castling(moved_ids, prev_positions, curr_positions, id_to_piece)
-        if castle and castle in board.legal_moves:
-            chosen_move = castle
-
-        if chosen_move is None and len(moved_ids) == 1:
-            pid = moved_ids[0]
-            from_sq = prev_positions.get(pid)
-            to_sq = curr_positions.get(pid)
-            piece = id_to_piece.get(pid)
-            record["from_to"] = {"id": pid, "from": from_sq, "to": to_sq}
-
-            if from_sq is not None and to_sq is not None and piece is not None:
-                promotion = None
-                rank = chess.square_rank(to_sq)
-                if piece.piece_type == chess.PAWN and rank in (0, 7):
-                    promotion = chess.QUEEN
-                move = chess.Move(from_sq, to_sq, promotion=promotion)
-                if move in board.legal_moves:
-                    chosen_move = move
-                else:
-                    chosen_move = _match_legal_move(board, from_sq, to_sq, promotion)
-
-        if chosen_move is None:
-            record["uncertain"] = True
-            record["reason"] = "无法唯一确定走法"
-            moves_san.append("??")
-            uncertain.append(record)
-            prev_positions = curr_positions
-            continue
-
-        san = board.san(chosen_move)
-        board.push(chosen_move)
-        moves_san.append(san)
-        prev_positions = curr_positions
-        record["san"] = san
-        move_debug.append(record)
-
+    board, _, _ = _init_board_from_map(piece_map)
+    states = [{"piece_ids": frame["board_ids"]} for frame in board_grids]
+    moves, confidence = decode_moves_from_tags(
+        states, initial_fen=board.fen(),
+        output_dir=str(output_dir) if output_dir else None,
+    )
+    debug = []
+    for move, item in zip(moves, confidence):
+        record = dict(item, step=item.get("frame"))
+        if move != "??":
+            record["san"] = move
+        debug.append(record)
+    uncertain = [item for item in debug if item["uncertain"]]
     if output_dir and uncertain:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "uncertain_moves.json").write_text(
-            json.dumps(uncertain, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            json.dumps(uncertain, ensure_ascii=False, indent=2), encoding="utf-8",
         )
-
-    return moves_san, move_debug
+    return moves, debug

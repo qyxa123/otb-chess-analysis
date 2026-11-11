@@ -5,6 +5,7 @@
 """
 
 from typing import List, Dict
+from .classify import evaluation_cp
 
 
 def find_key_moves(analysis: List[Dict]) -> List[int]:
@@ -40,8 +41,8 @@ def find_key_moves(analysis: List[Dict]) -> List[int]:
     max_swing = 0
     max_swing_move = None
     for i in range(1, len(analysis)):
-        prev_eval = analysis[i-1].get('eval_cp', 0)
-        curr_eval = analysis[i].get('eval_cp', 0)
+        prev_eval = evaluation_cp(analysis[i-1])
+        curr_eval = evaluation_cp(analysis[i])
         swing = abs(curr_eval - prev_eval)
         if swing > max_swing:
             max_swing = swing

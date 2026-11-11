@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-import io
 
 import chess
 import chess.pgn
+from self_analysis import parse_pgn_text
 
 
 LABEL_ORDER = [
@@ -70,17 +70,16 @@ class GameReviewFormatter:
             best_delta: Difference between played move and the best move. Optional.
         """
 
-        if perspective_change >= 50:
-            return "Brilliant"
-        if perspective_change >= 20:
-            return "Great"
-        if perspective_change >= -10:
-            return "Best" if best_delta is None or best_delta < 5 else "Good"
-        if perspective_change >= -50:
-            return "Good" if perspective_change > -25 else "Mistake"
-        if perspective_change >= -120:
-            return "Blunder"
-        return "Miss"
+        # A material gain alone cannot establish a brilliant move. Compare
+        # against the available best move, using a swing only as a fallback.
+        loss = max(0.0, float(best_delta)) if best_delta is not None else max(0.0, -perspective_change)
+        if loss <= 10:
+            return "Best"
+        if loss <= 50:
+            return "Good"
+        if loss <= 100:
+            return "Mistake"
+        return "Blunder"
 
     @staticmethod
     def coach_text(label: str, san: str, best_san: Optional[str], swing: float) -> CoachBubble:
@@ -103,7 +102,7 @@ class GameReviewFormatter:
             detail_parts.append("评估下降，留意对手的反击。")
 
         if best_san and best_san != san:
-            detail_parts.append(f"引擎更喜欢 {best_san}，因为它能保持更高的稳定性。")
+            detail_parts.append(f"可比较推荐着法 {best_san}，再结合完整变化判断。")
 
         suggestions = []
         if label in {"Mistake", "Blunder", "Miss"}:
@@ -118,16 +117,18 @@ class GameReviewFormatter:
 
     def build_review(self, pgn_text: str, analysis: List[Dict[str, object]]) -> GameReview:
         """Combine PGN and analysis results into a :class:`GameReview`."""
-        pgn_game = chess.pgn.read_game(io.StringIO(pgn_text))
-        if pgn_game is None:
-            raise ValueError("Invalid PGN provided")
+        pgn_game = parse_pgn_text(pgn_text)
+        moves = list(pgn_game.mainline_moves())
+        if len(analysis) != len(moves):
+            raise ValueError("Analysis length does not match the PGN move count")
 
         reviews: List[MoveReview] = []
         board = pgn_game.board()
         annotated_game = chess.pgn.Game.from_board(board)
         annotated_game.headers.update(pgn_game.headers)
+        annotated_node = annotated_game
 
-        for idx, move in enumerate(pgn_game.mainline_moves()):
+        for idx, move in enumerate(moves):
             analysis_entry = analysis[idx]
             eval_before = float(analysis_entry.get("eval_before", 0.0))
             eval_after = float(analysis_entry.get("eval_after", 0.0))
@@ -137,9 +138,16 @@ class GameReviewFormatter:
             swing_raw = eval_after - eval_before
             perspective_change = swing_raw if mover_is_white else -swing_raw
 
-            label = self.label_move(perspective_change, analysis_entry.get("best_diff"))
+            material_only = analysis_entry.get("analysis_source") == "material"
+            label = "Material" if material_only else self.label_move(perspective_change, analysis_entry.get("best_diff"))
             san = board.san(move)
             coach = self.coach_text(label, san, best_san, perspective_change)
+            if material_only:
+                coach = CoachBubble(
+                    headline="基础子力变化",
+                    detail=str(analysis_entry.get("feedback", "仅比较子力数量，未进行引擎战术分析。")),
+                    suggestions=["安装Stockfish后再判断最佳着法和失误。"],
+                )
 
             reviews.append(
                 MoveReview(
@@ -161,13 +169,11 @@ class GameReviewFormatter:
             if best_san:
                 comment_parts.append(f"推荐 {best_san}")
             comment_parts.append(coach.headline)
-            pgn_node = annotated_game.add_variation(move)
-            pgn_node.comment = " | ".join(comment_parts)
+            annotated_node = annotated_node.add_variation(move)
+            annotated_node.comment = " | ".join(comment_parts)
 
-        annotated_io = chess.pgn.StringIO()
         exporter = chess.pgn.StringExporter(headers=True, variations=False, comments=True)
-        annotated_game.accept(exporter)
-        annotated_pgn = str(exporter)
+        annotated_pgn = annotated_game.accept(exporter)
 
         return GameReview(headers=dict(pgn_game.headers), reviews=reviews, annotated_pgn=annotated_pgn)
 

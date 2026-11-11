@@ -13,11 +13,13 @@ from otbreview.pipeline.main import analyze_video
 class VideoHandler(FileSystemEventHandler):
     """处理新视频文件"""
     
-    def __init__(self, outroot_dir: str, use_markers: bool, depth: int, pv_length: int):
+    def __init__(self, outroot_dir: str, use_markers: bool, depth: int, pv_length: int,
+                 use_piece_tags: bool = True):
         self.outroot_dir = Path(outroot_dir)
         self.use_markers = use_markers
         self.depth = depth
         self.pv_length = pv_length
+        self.use_piece_tags = use_piece_tags
         self.processed = set()
     
     def on_created(self, event):
@@ -53,7 +55,8 @@ class VideoHandler(FileSystemEventHandler):
                 outdir=str(outdir),
                 use_markers=self.use_markers,
                 depth=self.depth,
-                pv_length=self.pv_length
+                pv_length=self.pv_length,
+                use_piece_tags=self.use_piece_tags,
             )
             self.processed.add(str(file_path))
             print(f"处理完成: {outdir}")
@@ -68,7 +71,8 @@ def watch_inbox(
     outroot_dir: str,
     use_markers: bool = False,
     depth: int = 14,
-    pv_length: int = 6
+    pv_length: int = 6,
+    use_piece_tags: bool = True,
 ) -> None:
     """
     监控inbox目录，自动处理新视频
@@ -88,7 +92,8 @@ def watch_inbox(
         outroot_dir=outroot_dir,
         use_markers=use_markers,
         depth=depth,
-        pv_length=pv_length
+        pv_length=pv_length,
+        use_piece_tags=use_piece_tags,
     )
     
     observer = Observer()

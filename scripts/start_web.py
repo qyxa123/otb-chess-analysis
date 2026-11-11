@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 
 def main():
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parents[1]
     app_path = project_root / "app.py"
     
     if not app_path.exists():
@@ -24,21 +24,22 @@ def main():
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(project_root / "requirements.txt")])
     
     # Run streamlit
-    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path)]
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path), *sys.argv[1:]]
     
     print(f"Running: {' '.join(cmd)}")
     
     # Launch in a subprocess
-    process = subprocess.Popen(cmd)
+    process = subprocess.Popen(cmd, cwd=project_root)
     
     print("Web server started! It should open in your browser shortly.")
     print("Press Ctrl+C to stop.")
     
     try:
-        process.wait()
+        return process.wait()
     except KeyboardInterrupt:
         print("\nStopping server...")
         process.terminate()
+        return process.wait()
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,9 +1,11 @@
-opencv-contrib-python>=4.5.3
-python-chess>=1.9.4
-watchdog>=2.1.0
-numpy>=1.19.0
+# Shared runtime for CLI, Studio, and local dashboard (Python 3.10+).
+opencv-contrib-python>=4.8,<5
+python-chess>=1.999
+watchdog>=2.1
+numpy>=1.24,<3
 Flask>=2.2
-reportlab>=3.6.0
-
-streamlit>=1.20.0
+Jinja2>=3.0
+streamlit>=1.32,<2
+pandas>=2.0,<3
+altair>=5,<7
 fpdf>=1.7.2
